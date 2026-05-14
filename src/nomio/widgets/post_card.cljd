@@ -1,0 +1,191 @@
+(ns nomio.widgets.post-card
+  "Post preview card component: Responsible for displaying the post's cover, title, summary, tags, and meta-information in the feed."
+  (:require
+   ["package:flutter/material.dart" :as m]
+   ["package:mongol/mongol.dart" :as mgl]
+   [cljd.flutter :as f]
+   [nomio.utils.time-format :as time-format]))
+
+;; =============================================================================
+;; 1. Helper: Extract preview information from blocks
+;; =============================================================================
+
+(defn- extract-preview
+  "Extracts cover image and plain text summary from rich text blocks."
+  [blocks]
+  (let [first-img (first (filter #(= (get % "type") "image") blocks))
+        text-blocks (filter #(not= (get % "type") "image") blocks)
+        ;; Extract the first 80 characters as a summary
+        preview-text (apply str (take 80 (apply str (map #(get % "text" "") text-blocks))))]
+    {:image-url (get first-img "url")
+     :content (if (empty? preview-text) 
+                "Хоосон байна" 
+                (str preview-text "..."))}))
+
+;; =============================================================================
+;; 2. Helper: Render Clickable Tag
+;; =============================================================================
+
+(defn- render-tag
+  "Renders a single tag as a clickable pill. 
+   Navigates to the Topic Screen when tapped, preventing the card's outer tap event."
+  [ctx primary-color tag-name]
+  (m/Padding
+   .padding (m/EdgeInsets.only .bottom 8.0)
+   .child
+   (m/InkWell
+    ;; Pushes the topic route with the tag argument
+    .onTap (fn [] 
+             (m/Navigator.pushNamed ctx "/topic" .arguments {:tag tag-name})
+             nil)
+    .borderRadius (m/BorderRadius.circular 8.0)
+    .child
+    (m/Container
+     .padding (m/EdgeInsets.symmetric .horizontal 4.0 .vertical 8.0)
+     .decoration (m/BoxDecoration
+                  .color (.withOpacity primary-color 0.1)
+                  .borderRadius (m/BorderRadius.circular 8.0))
+     .child
+     (mgl/MongolText (str "# " tag-name)
+                     .style (.copyWith (.-labelSmall (.-textTheme (m/Theme.of ctx)))
+                                       .color primary-color 
+                                       .fontFamily "OyunQaganTig"))))))
+
+;; =============================================================================
+;; 3. Core Card Component
+;; =============================================================================
+
+(defn post-card 
+  "Post preview card.
+   Parameters:
+   - :post Dictionary data of the post fetched from the backend.
+   - :on-tap Callback function triggered when the card body is tapped."
+  [{:keys [post on-tap]}]
+  (f/widget
+   :context ctx
+   ;; Deeply destructure Material 3 theme colors and typography
+   :get {{{:flds [surface onSurface surfaceVariant onSurfaceVariant outlineVariant primary]} .-colorScheme
+          {:flds [titleMedium bodyMedium labelSmall]} .-textTheme} m/Theme}
+   
+   :let [preview (extract-preview (get post "blocks" []))
+         title (get post "title" "Гарчиггүй")
+         tags (vec (or (get post "tags") []))
+         time-str (time-format/format-relative (get post "created_at"))
+         author-id (get post "author_id" "")
+         author-nickname (get post "author_nickname")
+         author-username (get post "author_username")
+         author-label (cond
+                        (and author-nickname author-username)
+                        (str author-nickname "\n@" author-username)
+                        author-nickname author-nickname
+                        author-username (str "@" author-username)
+                        :else (str "Хэрэглэгч " author-id))]
+   
+   (m/Card
+    .color surface
+    .elevation 0.0
+    .clipBehavior m.Clip/antiAlias
+    .shape (m/RoundedRectangleBorder
+            .side (m/BorderSide .color outlineVariant .width 0.5)
+            .borderRadius (m/BorderRadius.all (m/Radius.circular 12.0)))
+    .child
+    (m/InkWell
+     .onTap on-tap
+     .child
+     (m/Container
+      ;; Limit card width to maintain a consistent skeleton in the horizontal feed layout
+      .width 180.0
+      .child
+      (m/Column
+       .crossAxisAlignment m.CrossAxisAlignment/start
+       .children
+       [;; ------------------------------------------
+        ;; A. Top: Cover Image
+        ;; ------------------------------------------
+        (if (and (:image-url preview) (not (empty? (:image-url preview))))
+          (m/AspectRatio
+           .aspectRatio 4/3
+           .child (m/Image.network (:image-url preview) .fit m.BoxFit/cover))
+          
+          ;; Fallback placeholder image
+          (m/Container
+           .height 135.0
+           .width double/infinity
+           .color surfaceVariant
+           .child (m/Icon m.Icons/article .color outlineVariant .size 48.0)))
+        
+        ;; ------------------------------------------
+        ;; B. Bottom: Text Area (Traditional Mongolian horizontally expanding layout)
+        ;; ------------------------------------------
+        (m/Expanded
+         .child
+         (m/Padding
+          .padding (m/EdgeInsets.all 12.0)
+          .child
+          (m/Row
+           .crossAxisAlignment m.CrossAxisAlignment/start
+           .children
+           [;; 1. Title (Left-aligned, first column)
+            (m/Padding
+             .padding (m/EdgeInsets.only .right 8.0)
+             .child
+             (mgl/MongolText title
+                             .style (.copyWith titleMedium
+                                               .fontFamily "OyunQaganTig"
+                                               .fontWeight m.FontWeight/bold
+                                               .color onSurface)))
+            
+            ;; 2. Summary (Center, takes up remaining space, limited to max 3 lines/columns)
+            (m/Expanded
+             .child 
+             (mgl/MongolText (:content preview)
+                             .style (.copyWith bodyMedium
+                                               .fontFamily "OyunQaganTig"
+                                               .color onSurfaceVariant
+                                               .height 1.4)
+                             ;; Limit lines to prevent long text from breaking the card layout
+                             .maxLines 3
+                             .overflow m.TextOverflow/ellipsis))
+
+            ;; 3. Topics / Tags (Vertical layout for Mongolian script)
+            (if (seq tags)
+              (m/Padding
+               .padding (m/EdgeInsets.only .left 8.0)
+               .child
+               (m/Column
+                .mainAxisAlignment m.MainAxisAlignment/start
+                ;; Display a maximum of 2 tags to prevent UI overflow on small cards
+                .children
+                (mapv #(render-tag ctx primary %) (take 2 tags))))
+              ;; Fallback empty widget when there are no tags
+              (m/SizedBox))
+            
+            ;; 4. Meta-information (Right-aligned, bottom-aligned)
+            (m/Padding
+             .padding (m/EdgeInsets.only .left 8.0)
+             .child 
+             (m/Column
+              .mainAxisAlignment m.MainAxisAlignment/end
+              .crossAxisAlignment m.CrossAxisAlignment/center
+              .children
+              [;; Clickable Author Section
+               (m/InkWell
+                .onTap (fn [] 
+                         (m/Navigator.pushNamed ctx "/profile" .arguments {:id author-id})
+                         nil)
+                .borderRadius (m/BorderRadius.circular 4.0)
+                .child
+                (m/Padding
+                 .padding (m/EdgeInsets.all 4.0)
+                 .child
+                 (m/Column 
+                  .children [(m/Icon m.Icons/person .size 12.0 .color primary)
+                             (m/SizedBox .height 4.0)
+                             (mgl/MongolText author-label
+                                             .style (.copyWith labelSmall .color primary .fontFamily "OyunQaganTig"))])))
+               
+               (m/SizedBox .height 8.0)
+               
+               ;; Publish time
+               (mgl/MongolText time-str
+                               .style (.copyWith labelSmall .color onSurfaceVariant .fontFamily "OyunQaganTig"))]))])))]))))))

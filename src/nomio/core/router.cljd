@@ -1,0 +1,125 @@
+(ns nomio.core.router
+  "Application global routing center: Intercepts all navigation requests, parses arguments, and dispatches to the corresponding Screen components."
+  (:require
+   ["package:flutter/material.dart" :as m]
+   [nomio.screens.feed :as feed]
+   [nomio.screens.post-detail :as post-detail]
+   [nomio.screens.create-post :as create-post]
+   [nomio.screens.profile :as profile]
+   [nomio.screens.auth :as auth]
+   [nomio.screens.topic :as topic]
+   [nomio.screens.explore :as explore]
+   [nomio.screens.post-comments :as post-comments]))
+
+;; =============================================================================
+;; Named Route Constants
+;; =============================================================================
+
+(def route-home "/")
+(def route-login "/login")
+(def route-register "/register")
+(def route-post-detail "/post")
+(def route-create-post "/create")
+(def route-profile "/profile")
+(def route-topic "/topic")
+(def route-explore "/explore")
+(def route-comments "/comments")
+
+;; =============================================================================
+;; Core: Route Generator
+;; =============================================================================
+
+(defn generate-route
+  "Unifies the handling of app navigation and argument passing.
+   Flutter calls this function to build the corresponding page when m/Navigator.pushNamed is used."
+  [^m/RouteSettings settings]
+  (let [route-name (.-name settings)
+        args (.-arguments settings)]
+    (m/MaterialPageRoute
+     .settings settings
+     .builder
+     (fn [ctx]
+       (case route-name
+         ;; 1. Home feed (Default startup page)
+         "/"
+         (feed/feed-screen)
+         
+         ;; 2. Authentication screens
+         "/login"
+         (auth/login-screen)
+         
+         "/register"
+         (auth/register-screen)
+
+         ;; 3. Post creation screen
+         "/create"
+         (let [edit-args (if (map? args) args nil)]
+           (create-post/create-post-screen edit-args))
+
+         ;; 4. Profile screen (Pass args to extract target user ID)
+         "/profile"
+         (let [profile-args (if (map? args) args nil)]
+           (profile/profile-screen profile-args))
+
+         ;; 5. Topic screen (Pass args to extract topic tag)
+         "/topic"
+         (let [topic-args (if (map? args) args nil)]
+           (topic/topic-screen topic-args))
+         
+         ;; 6. Explore screen (Search and hot topics)
+         "/explore"
+         (explore/explore-screen)
+
+         ;; 7. Post detail screen (Requires parsing post-id from arguments)
+         "/post"
+         (let [post-id (if (map? args) (:id args) args)]
+           (if post-id
+             (post-detail/post-detail-screen post-id)
+             ;; Defensive programming: If no ID is passed, show an error page instead of crashing
+             (m/Scaffold .body (m/Center .child (m/Text "Error: Post ID not found"))))) 
+
+         "/comments"
+         (let [post-id (if (map? args) (:id args) args)]
+           (if post-id
+             (post-comments/post-comments-screen post-id)
+             (m/Scaffold .body (m/Center .child (m/Text "Error: Post ID not found")))))
+
+         ;; 8. 404 Fallback page (Undefined routes)
+         (m/Scaffold
+          .appBar (m/AppBar .title (m/Text "404"))
+          .body (m/Center .child (m/Text (str "Page not found: " route-name))))))))) 
+
+;; =============================================================================
+;; Navigation Helper Functions
+;; =============================================================================
+
+(defn push-to-detail [ctx post-id]
+  (m/Navigator.pushNamed ctx route-post-detail .arguments {:id post-id}))
+
+(defn push-to-create [ctx]
+  (m/Navigator.pushNamed ctx route-create-post))
+
+;; Supports passing a user ID. If not provided, it defaults to viewing your own profile.
+(defn push-to-profile 
+  ([ctx] (m/Navigator.pushNamed ctx route-profile))
+  ([ctx user-id] (m/Navigator.pushNamed ctx route-profile .arguments {:id user-id})))
+
+(defn push-to-login [ctx]
+  (m/Navigator.pushNamed ctx route-login))
+
+(defn push-to-register [ctx]
+  (m/Navigator.pushNamed ctx route-register))
+
+;; Helper for navigating to a specific topic tag
+(defn push-to-topic [ctx tag]
+  (m/Navigator.pushNamed ctx route-topic .arguments {:tag tag}))
+
+;; Helper for navigating to the explore page
+(defn push-to-explore [ctx]
+  (m/Navigator.pushNamed ctx route-explore))
+
+(defn push-to-edit [ctx post-id title blocks]
+  (m/Navigator.pushNamed ctx route-create-post 
+                         .arguments {:edit-id post-id 
+                                     :edit-title title 
+                                     :edit-blocks blocks}))

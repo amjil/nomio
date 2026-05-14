@@ -1,0 +1,147 @@
+(ns nomio.widgets.reaction-bar
+  "Interaction component: Handles commenting, liking, and bookmarking. 
+   Refactored for traditional Mongolian vertical layout and unbounded constraints."
+  (:require
+   ["package:flutter/material.dart" :as m]
+   ["package:mongol/mongol.dart" :as mgl]
+   [cljd.flutter :as f]
+   [nomio.core.api :as api]
+   [nomio.core.state :as state]
+   [components.toast :as toast]
+   [components.tokens :as tokens]))
+
+(defn reaction-bar 
+  "Post interaction widget.
+   Parameters:
+   - :post-id Current post ID.
+   - :on-comment-tap Callback triggered when writing a comment.
+   - :initial-liked? Initial like status.
+   - :initial-bookmarked? Initial bookmark status."
+  [{:keys [post-id on-comment-tap initial-liked? initial-bookmarked?]
+    :or {initial-liked? false
+         initial-bookmarked? false}}]
+  (let [!liked? (atom initial-liked?)
+        !like-loading? (atom false)
+        !bookmarked? (atom initial-bookmarked?)
+        !bookmark-loading? (atom false)]
+    
+    (f/widget
+     :context ctx
+     :get {{{:flds [primary surface surfaceVariant onSurfaceVariant outlineVariant]} .-colorScheme
+            {:flds [bodyMedium]} .-textTheme} m/Theme}
+     :watch [liked? !liked?
+             like-loading? !like-loading?
+             bookmarked? !bookmarked?
+             bookmark-loading? !bookmark-loading?]
+     
+     (m/Row
+      .mainAxisSize m.MainAxisSize/min
+      .crossAxisAlignment m.CrossAxisAlignment/start
+      .children
+      [;; =====================================================================
+       ;; 1. Comment Button
+       ;; =====================================================================
+       (m/InkWell
+        .onTap on-comment-tap
+        .borderRadius (m/BorderRadius.circular 24.0)
+        .child
+        (m/Container
+         .padding (m/EdgeInsets.symmetric .vertical 20.0 .horizontal 12.0)
+         .decoration (m/BoxDecoration
+                      .color surfaceVariant
+                      .borderRadius (m/BorderRadius.circular 24.0))
+         .child (m/Column
+                 .mainAxisSize m.MainAxisSize/min
+                 .children
+                 [(m/Icon m.Icons/edit .size 20.0 .color onSurfaceVariant)
+                  (m/SizedBox .height 12.0)
+                  (mgl/MongolText "Сэтгэгдэл үлдээх"  ; "Write comment"
+                                  .style (.copyWith bodyMedium 
+                                                    .fontFamily "OyunQaganTig" 
+                                                    .color onSurfaceVariant))])))
+
+       (m/SizedBox .width 16.0)
+
+       ;; =====================================================================
+       ;; 2. Like Button
+       ;; =====================================================================
+       (m/InkWell
+        .onTap (fn []
+                 (if-not (state/current-user-id)
+                   (m/Navigator.pushNamed ctx "/login")
+                   (when-not @!like-loading?
+                     (reset! !like-loading? true)
+                     (let [target-state (not @!liked?)]
+                       (reset! !liked? target-state)
+                       (-> (api/toggle-like post-id)
+                           (.then (fn [_] (reset! !like-loading? false)))
+                           (.catchError (fn [err]
+                                          (reset! !liked? (not target-state))
+                                          (reset! !like-loading? false)
+                                          (toast/error ctx "Алдаа гарлаа" :fade)))))))
+                 nil)
+        .borderRadius (m/BorderRadius.circular 24.0)
+        .child
+        (m/Container
+         .padding (m/EdgeInsets.symmetric .vertical 20.0 .horizontal 12.0)
+         .decoration (m/BoxDecoration
+                      .color (if liked? (.withOpacity primary 0.1) m.Colors/transparent)
+                      .border (m/Border.all .color (if liked? primary outlineVariant))
+                      .borderRadius (m/BorderRadius.circular 24.0))
+         .child (m/Column
+                 .mainAxisSize m.MainAxisSize/min
+                 .children
+                 [(m/Icon (if liked? m.Icons/thumb_up_alt m.Icons/thumb_up_alt_outlined)
+                          .size 20.0
+                          .color (if liked? primary onSurfaceVariant))
+                  (m/SizedBox .height 12.0)
+                  (mgl/MongolText "Таалагдлаа"  ; "Like"
+                                  .style (.copyWith bodyMedium 
+                                                    .fontFamily "OyunQaganTig"
+                                                    .color (if liked? primary onSurfaceVariant)))])))
+
+       (m/SizedBox .width 16.0)
+
+       ;; =====================================================================
+       ;; 3. Bookmark Button (NEW!)
+       ;; =====================================================================
+       (m/InkWell
+        .onTap (fn []
+                 (if-not (state/current-user-id)
+                   (m/Navigator.pushNamed ctx "/login")
+                   (when-not @!bookmark-loading?
+                     (reset! !bookmark-loading? true)
+                     (let [target-state (not @!bookmarked?)]
+                       ;; Optimistic UI update
+                       (reset! !bookmarked? target-state)
+                       (-> (api/toggle-bookmark post-id)
+                           (.then (fn [_]
+                                    (reset! !bookmark-loading? false)
+                                    ;; Optional: Show a toast when successfully bookmarked
+                                    (if target-state
+                                      (toast/success ctx "Хадгаллаа" :fade) ; "Saved"
+                                      (toast/success ctx "Хадгалалтаас гаргалаа" :fade)))) ; "Unsaved"
+                           (.catchError (fn [err]
+                                          (reset! !bookmarked? (not target-state))
+                                          (reset! !bookmark-loading? false)
+                                          (toast/error ctx "Алдаа гарлаа" :fade)))))))
+                 nil)
+        .borderRadius (m/BorderRadius.circular 24.0)
+        .child
+        (m/Container
+         .padding (m/EdgeInsets.symmetric .vertical 20.0 .horizontal 12.0)
+         .decoration (m/BoxDecoration
+                      .color (if bookmarked? (.withOpacity primary 0.1) m.Colors/transparent)
+                      .border (m/Border.all .color (if bookmarked? primary outlineVariant))
+                      .borderRadius (m/BorderRadius.circular 24.0))
+         .child (m/Column
+                 .mainAxisSize m.MainAxisSize/min
+                 .children
+                 [(m/Icon (if bookmarked? m.Icons/bookmark m.Icons/bookmark_border)
+                          .size 20.0
+                          .color (if bookmarked? primary onSurfaceVariant))
+                  (m/SizedBox .height 12.0)
+                  (mgl/MongolText "Хадгалах"  ; "Save/Bookmark"
+                                  .style (.copyWith bodyMedium 
+                                                    .fontFamily "OyunQaganTig"
+                                                    .color (if bookmarked? primary onSurfaceVariant)))])))]))))

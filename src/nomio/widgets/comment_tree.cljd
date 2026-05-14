@@ -1,0 +1,223 @@
+(ns nomio.widgets.comment-tree
+  "Two-level flattened comment tree with @mentions for deep replies and clickable avatars for profile navigation."
+  (:require
+   ["package:flutter/material.dart" :as m]
+   ["package:mongol/mongol.dart" :as mgl]
+   [cljd.flutter :as f]
+   [nomio.core.state :as state]
+   [nomio.utils.time-format :as time-format]
+   [components.tokens :as tokens]))
+
+;; =============================================================================
+;; 1. Helper: Recursively find all descendants and flatten them
+;; =============================================================================
+
+(defn- normalize-id
+  "Normalizes comment identifiers to string keys for stable parent-child matching."
+  [v]
+  (when-not (nil? v) (str v)))
+
+(defn- normalize-parent-id
+  "Normalizes parent_id; treats nil/0/\"0\" as root (nil)."
+  [v]
+  (let [sid (normalize-id v)]
+    (if (or (nil? sid) (= sid "0")) nil sid)))
+
+(defn- flatten-descendants 
+  "Recursively finds all nested children of a root comment and flattens them into a single list."
+  [root-id grouped-comments]
+  (let [children (get grouped-comments root-id [])]
+    (reduce (fn [acc child]
+              (into (conj acc child) (flatten-descendants (normalize-id (get child "id")) grouped-comments)))
+            [] children)))
+
+;; =============================================================================
+;; 2. Single Comment Card
+;; =============================================================================
+
+(defn- comment-card 
+  "Renders a single comment. Supports @mentions via MongolRichText if it's a deep reply."
+  [comment reply-to-username on-reply on-delete is-child?]
+  (f/widget
+   :context ctx
+   :get {{{:flds [surfaceVariant onSurfaceVariant primary onSurface]} .-colorScheme
+          {:flds [bodyMedium labelSmall]} .-textTheme} m/Theme}
+   
+   :let [user-id (get comment "user_id")
+         nickname (get comment "nickname")
+         username (get comment "username")
+         author-label (cond
+                        (and nickname username) (str nickname "\n@" username)
+                        nickname nickname
+                        username (str "@" username)
+                        :else (str "Хэрэглэгч " user-id))
+         content (get comment "content")
+         time-str (time-format/format-relative (get comment "created_at"))]
+   
+   (m/Container
+    .margin (m/EdgeInsets.only .right (tokens/space :m))
+    .padding (m/EdgeInsets.all (tokens/space :m))
+    .decoration (m/BoxDecoration
+                 .color (if is-child? 
+                          (-> surfaceVariant (.withOpacity 0.5)) 
+                          surfaceVariant)
+                 .borderRadius (m/BorderRadius.circular (tokens/radius :m)))
+    .child
+    (m/Row
+     .mainAxisSize m.MainAxisSize/min
+     .crossAxisAlignment m.CrossAxisAlignment/start
+     .children
+     [;; -----------------------------------------------------------------
+      ;; A. Left side: Author information (Clickable for Profile Navigation)
+      ;; -----------------------------------------------------------------
+      (m/InkWell
+       .onTap (fn [] 
+                (m/Navigator.pushNamed ctx "/profile" .arguments {:id user-id})
+                nil) 
+       .borderRadius (m/BorderRadius.circular 8.0)
+       .child
+       (m/Padding
+        .padding (m/EdgeInsets.all 4.0)
+        .child
+        (m/Column
+         .mainAxisSize m.MainAxisSize/min
+         .crossAxisAlignment m.CrossAxisAlignment/center
+         .children
+         [(m/Icon m.Icons/person_outline .size 20.0 .color primary)
+          (m/SizedBox .height 8.0)
+          (mgl/MongolText author-label
+                          .style (.copyWith labelSmall 
+                                            .color primary 
+                                            .fontFamily "OyunQaganTig"
+                                            .fontWeight m.FontWeight/bold))])))
+
+      (m/SizedBox .width (tokens/space :m))
+
+      ;; -----------------------------------------------------------------
+      ;; B. Middle: Comment content with optional @mention
+      ;; -----------------------------------------------------------------
+      (if reply-to-username
+        (mgl/MongolRichText
+         .text
+         (m/TextSpan
+          .children
+          [(m/TextSpan .text (str "@" reply-to-username " : ")
+                       .style (.copyWith bodyMedium 
+                                         .color primary 
+                                         .fontWeight m.FontWeight/bold 
+                                         .fontFamily "OyunQaganTig"))
+           (m/TextSpan .text content
+                       .style (.copyWith bodyMedium 
+                                         .color onSurface 
+                                         .height 1.6 
+                                         .fontFamily "OyunQaganTig"))]))
+        (mgl/MongolText content
+                        .style (.copyWith bodyMedium 
+                                          .color onSurface
+                                          .height 1.6
+                                          .fontFamily "OyunQaganTig")))
+
+      (m/SizedBox .width (tokens/space :m))
+
+      ;; -----------------------------------------------------------------
+      ;; C. Right side: Time, reply button, and optional delete button
+      ;; -----------------------------------------------------------------
+      (m/Column
+       .mainAxisSize m.MainAxisSize/min
+       .crossAxisAlignment m.CrossAxisAlignment/center
+       .children
+       [(mgl/MongolText (or time-str "") 
+                        .style (.copyWith labelSmall 
+                                          .color onSurfaceVariant 
+                                          .fontFamily "OyunQaganTig"))
+        (m/SizedBox .height (tokens/space :l))
+        ;; Reply button
+        (m/InkWell
+         .onTap #(on-reply comment)
+         .borderRadius (m/BorderRadius.circular 20.0)
+         .child
+         (m/Container
+          .padding (m/EdgeInsets.symmetric .vertical 12.0 .horizontal 4.0)
+          .decoration (m/BoxDecoration
+                       .color (.withOpacity primary 0.1)
+                       .borderRadius (m/BorderRadius.circular 20.0))
+          .child
+          (m/Column
+           .mainAxisSize m.MainAxisSize/min
+           .children
+           [(m/Icon m.Icons/reply .size 16.0 .color primary)
+            (m/SizedBox .height 6.0)
+            (mgl/MongolText "Хариулах"
+                            .style (.copyWith labelSmall 
+                                              .color primary 
+                                              .fontFamily "OyunQaganTig"))])))
+        
+        ;; Delete button (only for comment owner)
+        (if (and on-delete
+                 (= (get comment "user_id") (state/current-user-id)))
+          (m/Padding
+           .padding (m/EdgeInsets.only .top 8.0)
+           .child
+           (m/IconButton
+            .icon (m/Icon m.Icons/delete_outline .size 18.0 .color m.Colors/red)
+            .tooltip "Устгах"
+            .onPressed #(on-delete (get comment "id"))))
+          (m/SizedBox.shrink))])]))))
+
+;; =============================================================================
+;; 3. Main Comment Tree Component
+;; =============================================================================
+
+(defn comment-tree 
+  "Two-level flattened comment tree. 
+   Deep replies are visually flattened to the second level but include an @username mention text."
+  [{:keys [comments on-reply on-delete]}]
+  (let [;; 🌟 Fast lookup map for finding parent usernames: {comment_id -> username}
+        id->username (into {}
+                           (map (juxt #(normalize-id (get % "id"))
+                                      #(get % "username"))
+                                comments))
+        ;; Group all comments by their parent_id
+        grouped-comments (group-by #(normalize-parent-id (get % "parent_id")) comments)
+        ;; Root comments are those with no parent (nil/0/"0")
+        root-comments (get grouped-comments nil [])]
+    
+    (f/widget
+     (if (empty? comments)
+       (m/Center
+        .child (mgl/MongolText "Одоогоор сэтгэгдэл алга байна"
+                               .style (m/TextStyle .fontFamily "OyunQaganTig" .color m.Colors/grey)))
+       
+       (m/Row
+        .crossAxisAlignment m.CrossAxisAlignment/start
+        .children
+        (mapv (fn [root]
+                (let [root-id (get root "id")
+                      ;; FLATTEN LOGIC: Find all descendants of this root and sort them chronologically by ID
+                      flat-descendants (sort-by #(get % "id" 0)
+                                                (flatten-descendants (normalize-id root-id) grouped-comments))]
+                  (m/Row
+                   .crossAxisAlignment m.CrossAxisAlignment/start
+                   .children
+                   (vec
+                    (remove nil?
+                     [;; 1. Render the Root Comment (no reply-to user)
+                      (comment-card root nil on-reply on-delete false)
+                      
+                      ;; 2. Render ALL descendants in a single flat level
+                      (when (seq flat-descendants)
+                        (m/Padding
+                         ;; Step down once for the 2nd level
+                         .padding (m/EdgeInsets.only .top 48.0 .right 8.0)
+                         .child
+                         (m/Row
+                          .crossAxisAlignment m.CrossAxisAlignment/start
+                          .children
+                          (mapv (fn [child]
+                                  (let [pid (normalize-parent-id (get child "parent_id"))
+                                        ;; If its parent is NOT the root, it means it's a "reply to a reply"
+                                        reply-to-username (when (not= pid (normalize-id root-id))
+                                                            (get id->username pid))]
+                                    (comment-card child reply-to-username on-reply on-delete true)))
+                                flat-descendants))))])))))
+              root-comments))))))

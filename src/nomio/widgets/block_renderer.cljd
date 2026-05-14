@@ -1,0 +1,270 @@
+(ns nomio.widgets.block-renderer
+  "Read-only rich text block renderer: Parses backend JSON blocks into Flutter native Widgets, supporting inline style restoration."
+  (:require
+   ["package:flutter/material.dart" :as m]
+   ["package:mongol/mongol.dart" :as mgl]
+   ["dart:core" :as dc]
+   ["dart:convert" :as convert]
+   [cljd.flutter :as f]
+   [components.tokens :as tokens]
+   [components.toast :as toast]))
+
+;; =============================================================================
+;; 1. Inline Spans Slicer
+;; =============================================================================
+
+(defn- build-text-spans 
+  "Slices plain text with span markers and converts them into an array of Flutter TextSpans."
+  [text spans base-style]
+  (let [text-len (count text)]
+    (if (or (empty? spans) (empty? text))
+      [(m/TextSpan .text text .style base-style)]
+      (loop [pos 0
+             rem-spans (sort-by #(get % "start") spans)
+             acc []]
+        (if (or (empty? rem-spans) (>= pos text-len))
+          (if (< pos text-len)
+            (conj acc (m/TextSpan .text (subs text pos) .style base-style))
+            acc)
+          (let [span (first rem-spans)
+                start (max pos (get span "start" 0))
+                end (min text-len (get span "end" 0))
+                attrs (get span "attrs" {})]
+            (if (>= start end)
+              (recur pos (rest rem-spans) acc)
+              (let [acc (if (< pos start)
+                          (conj acc (m/TextSpan .text (subs text pos start) .style base-style))
+                          acc)
+                    styled-font (cond-> base-style
+                                  (get attrs "bold")      (.copyWith .fontWeight m.FontWeight/bold)
+                                  (get attrs "italic")    (.copyWith .fontStyle m.FontStyle/italic)
+                                  (get attrs "underline") (.copyWith .decoration m.TextDecoration/underline))]
+                (recur end 
+                       (rest rem-spans)
+                       (conj acc (m/TextSpan .text (subs text start end) .style styled-font)))))))))))
+
+;; =============================================================================
+;; 2. Core: Block Renderer
+;; =============================================================================
+
+(defn render-block 
+  "Renders the corresponding read-only Mongolian component based on the backend block dictionary."
+  [block]
+  (f/widget
+   :get {{{:flds [primary onSurface onSurfaceVariant surfaceVariant outlineVariant]} .-colorScheme
+          {:flds [bodyMedium labelSmall]} .-textTheme} m/Theme}
+   :context ctx
+
+   :key (m/ValueKey. (get block "id"))
+   
+   :let [b-type (get block "type" "paragraph")
+         text-content (or (get block "text") (get block "content") "")
+         spans (or (get block "spans") (get block "content-spans") [])
+         image-url (or (get block "url") (get-in block ["data" "url"]) "")
+         
+         ;; 🌟 终极解析器：防止后端将 data 变成了 JSON 字符串
+         raw-data-val (or (get block "data") (get block :data))
+         raw-data (cond
+                    (string? raw-data-val) (try (convert/jsonDecode raw-data-val) (catch dc/Exception _ {}))
+                    raw-data-val raw-data-val
+                    :else {})
+                    
+         ;; 🌟 穷举所有可能的 Key 格式，无论前端下划线、中划线还是后端魔改，统统抓取
+         ref-post-id (or (get raw-data "ref-post-id")
+                         (get raw-data "ref_post_id")
+                         (get raw-data :ref-post-id)
+                         (get block "ref_post_id")
+                         (get block "ref-post-id")
+                         (get block :ref_post_id)
+                         (get block "source_post_id"))
+         
+         base-font (m/TextStyle .fontFamily "OyunQaganTig" .color onSurface)]
+
+     (m/Padding
+      .padding (m/EdgeInsets.only .right (tokens/space :l))
+      .child
+      (case b-type
+        ;; ------------------------------------------
+        ;; Post Quote (文章引用)
+        ;; ------------------------------------------
+        "post-quote"
+        (m/GestureDetector
+         .behavior m.HitTestBehavior/opaque
+         .onTap (fn []
+                  (if ref-post-id
+                    (m/Navigator.pushNamed ctx "/post" .arguments {:id ref-post-id})
+                    (do 
+                      ;; 🌟 调试神器：如果丢了 ID，立刻把后端发来的 block 打印到控制台！
+                      (dc/print (str "🚨 [DEBUG ALARM] Missing ID! Block data is: " block))
+                      (toast/error ctx "Уучлаарай, холбоосны ID олдсонгүй")))
+                  nil)
+         .child
+         (m/Container
+          .padding (m/EdgeInsets.all (tokens/space :m))
+          .decoration (m/BoxDecoration
+                       .color (.withOpacity primary 0.05)
+                       .border (m/Border.all .color (.withOpacity primary 0.3))
+                       .borderRadius (m/BorderRadius.circular (tokens/radius :m)))
+          .child
+          (m/Column
+           .crossAxisAlignment m.CrossAxisAlignment/start
+           .children
+           [(m/Icon m.Icons/link .size 20.0 .color primary)
+            (m/SizedBox .height 12.0)
+            (m/Expanded
+             .child
+             (mgl/MongolText text-content
+                             .style (.copyWith bodyMedium .color primary .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold)
+                             .maxLines 5
+                             .overflow m.TextOverflow/ellipsis))])))
+
+        ;; ------------------------------------------
+        ;; Block Reference (段落块引用)
+        ;; ------------------------------------------
+        "block-ref"
+        (m/GestureDetector
+         .behavior m.HitTestBehavior/opaque
+         .onTap (fn []
+                  (if ref-post-id
+                    (m/Navigator.pushNamed ctx "/post" .arguments {:id ref-post-id})
+                    (do 
+                      (dc/print (str "🚨 [DEBUG ALARM] Missing ID! Block data is: " block))
+                      (toast/error ctx "Уучлаарай, холбоосны ID олдсонгүй")))
+                  nil)
+         .child
+         (m/Container
+          .padding (m/EdgeInsets.all (tokens/space :m))
+          .decoration (m/BoxDecoration
+                       .color surfaceVariant
+                       .border (m/Border.all .color outlineVariant)
+                       .borderRadius (m/BorderRadius.circular (tokens/radius :m)))
+          .child
+          (m/Column
+           .crossAxisAlignment m.CrossAxisAlignment/start
+           .children
+           [(m/Icon m.Icons/format_quote .size 20.0 .color onSurfaceVariant)
+            (m/SizedBox .height 12.0)
+            (m/Expanded
+             .child
+             (mgl/MongolText text-content
+                             .style (.copyWith bodyMedium .color onSurfaceVariant .fontStyle m.FontStyle/italic .fontFamily "OyunQaganTig")
+                             .maxLines 5
+                             .overflow m.TextOverflow/ellipsis))])))
+
+        ;; ------------------------------------------
+        ;; Backlink (反向链接 - 动态注入)
+        ;; ------------------------------------------
+        "backlink"
+        (m/GestureDetector
+         .behavior m.HitTestBehavior/opaque
+         .onTap (fn []
+                  (if ref-post-id
+                    (m/Navigator.pushNamed ctx "/post" .arguments {:id ref-post-id})
+                    (do 
+                      (dc/print (str "🚨 [DEBUG ALARM] Missing ID! Block data is: " block))
+                      (toast/error ctx "Уучлаарай, холбоосны ID олдсонгүй")))
+                  nil)
+         .child
+         (m/Container
+          .padding (m/EdgeInsets.all (tokens/space :m))
+          .decoration (m/BoxDecoration
+                       .color surfaceVariant
+                       .border (m/Border.all .color outlineVariant)
+                       .borderRadius (m/BorderRadius.circular (tokens/radius :m)))
+          .child
+          (m/Column
+           .crossAxisAlignment m.CrossAxisAlignment/start
+           .children
+           [(m/Row
+             .children
+             [(m/Icon (if (= (get block "quote_type") "block") m.Icons/format_quote m.Icons/link)
+                      .size 16.0 .color primary)
+              (m/SizedBox .width 8.0)
+              (mgl/MongolText "Иш татсан"
+                              .style (.copyWith labelSmall .color primary .fontFamily "OyunQaganTig"))])
+            (m/SizedBox .height 16.0)
+            (m/Expanded
+             .child
+             (mgl/MongolText text-content
+                             .style (.copyWith bodyMedium .color onSurfaceVariant .fontFamily "OyunQaganTig")
+                             .maxLines 5
+                             .overflow m.TextOverflow/ellipsis))])))
+
+        ;; ------------------------------------------
+        ;; Image Block
+        ;; ------------------------------------------
+        "image"
+        (m/ClipRRect
+         .borderRadius (m/BorderRadius.circular (tokens/radius :s))
+         .child (m/Image.network image-url 
+                                 .width 240.0 
+                                 .fit m.BoxFit/cover
+                                 .loadingBuilder (fn [ctx child progress]
+                                                   (if (nil? progress)
+                                                     child
+                                                     (m/Container
+                                                      .width 240.0 .height 320.0
+                                                      .color outlineVariant
+                                                      .child (m/Center .child (m/CircularProgressIndicator)))))))
+
+        ;; ------------------------------------------
+        ;; Heading 1 (H1)
+        ;; ------------------------------------------
+        "heading-1"
+        (mgl/MongolText.rich
+         (m/TextSpan
+          .children (build-text-spans text-content spans 
+                                      (.copyWith base-font 
+                                                 .fontSize 28.0 
+                                                 .fontWeight m.FontWeight/w900))))
+
+        ;; ------------------------------------------
+        ;; Heading 2 (H2)
+        ;; ------------------------------------------
+        "heading-2"
+        (mgl/MongolText.rich
+         (m/TextSpan
+          .children (build-text-spans text-content spans 
+                                      (.copyWith base-font 
+                                                 .fontSize 22.0 
+                                                 .fontWeight m.FontWeight/bold))))
+
+        ;; ------------------------------------------
+        ;; Blockquote
+        ;; ------------------------------------------
+        "blockquote"
+        (m/Container
+         .padding (m/EdgeInsets.only .top (tokens/space :m))
+         .decoration (m/BoxDecoration .border (m/Border .top (m/BorderSide .color outlineVariant .width 4.0)))
+         .child (mgl/MongolText.rich
+                 (m/TextSpan
+                  .children (build-text-spans text-content spans 
+                                              (.copyWith base-font 
+                                                         .fontSize 16.0 
+                                                         .fontStyle m.FontStyle/italic 
+                                                         .color onSurfaceVariant)))))
+
+        ;; ------------------------------------------
+        ;; List Item
+        ;; ------------------------------------------
+        "list-item"
+        (m/Column
+         .crossAxisAlignment m.CrossAxisAlignment/start
+         .children
+         [(m/Padding
+           .padding (m/EdgeInsets.only .top 4.0 .right 8.0)
+           .child (m/Text "• " .style (m/TextStyle .fontSize 18.0 .color onSurface)))
+          (mgl/MongolText.rich
+           (m/TextSpan
+            .children (build-text-spans text-content spans 
+                                        (.copyWith base-font .fontSize 16.0 .height 1.6))))])
+
+        ;; ------------------------------------------
+        ;; Default Paragraph (Fallback)
+        ;; ------------------------------------------
+        (mgl/MongolText.rich
+         (m/TextSpan
+          .children (build-text-spans text-content spans 
+                                      (.copyWith base-font 
+                                                 .fontSize 16.0 
+                                                 .height 1.6))))))))

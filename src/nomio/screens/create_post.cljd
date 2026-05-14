@@ -1,0 +1,184 @@
+(ns nomio.screens.create-post
+  "Creation Center: A smart unified editor handling both Creating and Editing posts, with Reference Insertion."
+  (:require
+   ["package:flutter/material.dart" :as m]
+   ["dart:core" :as dc]
+   [cljd.flutter :as f]
+   [clojure.string :as str]
+   
+   ;; Nomio business layer
+   [nomio.core.api :as api]
+   [nomio.core.state :as state]
+   [nomio.utils.editor-parser :as editor-parser]
+   [components.toast :as toast]
+   
+   ;; Reference Search and Custom Cards
+   [nomio.widgets.reference-search :as ref-search]
+   [nomio.widgets.reference-cards :as ref-cards]
+   
+   ;; Editor components
+   [rich-editor.components.editor :as editor]
+   [rich-editor.components.text-field :as custom-tf]
+   [rich-editor.components.node-view :as node-view]
+   
+   ;; Editor core commands and configs
+   [rich-editor.commands.editor-commands :as editor-cmd]
+   [rich-editor.services.history-service :as history]
+   [rich-editor.services.ime-service :as ime]
+   [rich-editor.defaults :as defaults]))
+
+;; =============================================================================
+;; States
+;; =============================================================================
+
+(defonce !editor-state
+  (atom {:root ["block-1"]
+         :blocks {"block-1" {:id "block-1" :type :paragraph :content "" :content-spans [] :children []}}
+         :active-block-id nil
+         :cursor-visible false
+         :external-keyboard-delegate nil
+         :history {:undo-stack [] :redo-stack [] :max-depth 100}}))
+
+(defonce !refresh-tick (atom 0))
+(defonce !uploading? (atom false))
+(defonce !publishing? (atom false))
+
+(defonce _init-callbacks
+  (do
+    (ime/set-merge-focus-callback! (fn [!s prev-id new-offset] (editor-cmd/focus-block !s prev-id new-offset)))
+    (ime/set-split-focus-callback! (fn [!s new-id _] (editor-cmd/focus-block !s new-id 0)))
+    (ime/set-after-update-callback! (fn [] (swap! !refresh-tick inc)))
+    (ime/set-get-caret-offset-callback!
+     (fn [block-id]
+       (when-let [text-key (get @node-view/!block-text-keys block-id)]
+         (when-let [node-ctx (.-currentContext text-key)]
+           (try
+             (let [^m/RenderBox rb (.findRenderObject node-ctx)]
+               (.localToGlobal rb m.Offset/zero))
+             (catch Exception _ nil))))))))
+
+(defn- init-editor-state! [initial-blocks]
+  (let [base-state {:active-block-id nil 
+                    :cursor-visible false
+                    :external-keyboard-delegate nil
+                    :history {:undo-stack [] :redo-stack [] :max-depth 100}}]
+    (if (seq initial-blocks)
+      (reset! !editor-state (merge base-state (editor-parser/api-blocks->state initial-blocks)))
+      (reset! !editor-state (merge base-state {:root ["block-1"]
+                                               :blocks {"block-1" {:id "block-1" :type :paragraph :content "" :content-spans [] :children []}}}))))
+  (reset! !refresh-tick 0)
+  (reset! !uploading? false)
+  (reset! !publishing? false))
+
+;; =============================================================================
+;; Main Page View
+;; =============================================================================
+
+(defn create-post-screen 
+  [& [args]]
+  (let [edit-id (:edit-id args)
+        edit-title (:edit-title args)
+        edit-blocks (:edit-blocks args)
+        is-editing? (some? edit-id)]
+    
+    (init-editor-state! edit-blocks)
+    
+    (f/widget
+     :context ctx
+     :managed [title-focus-node (m/FocusNode)
+               title-ctrl (m/TextEditingController .text (or edit-title ""))]
+     :get {{{:flds [primary surface outlineVariant onSurfaceVariant]} .-colorScheme} m/Theme}
+     
+     :let [publish!
+           (fn []
+             (let [title-val (.-text title-ctrl)
+                   blocks (editor-parser/state->api-blocks @!editor-state)
+                   extracted-tags (editor-parser/extract-tags-from-blocks blocks)
+                   payload {"title" title-val 
+                            "blocks" blocks 
+                            "tags" extracted-tags}]
+               
+               (if (empty? blocks)
+                 (toast/error ctx "Контент хоосон байна")
+                 (do
+                   (reset! !publishing? true)
+                   (-> (if is-editing?
+                         (api/update-post edit-id payload)
+                         (api/create-post payload))
+                       (.then (fn [_]
+                                (reset! !publishing? false)
+                                (toast/success ctx (if is-editing? "Амжилттай шинэчлэгдлээ" "Амжилттай нийтлэгдлээ"))
+                                (m/Navigator.pop ctx)))
+                       (.catchError (fn [err]
+                                      (reset! !publishing? false)
+                                      (let [clean-err (str/replace (str err) #"^Exception: " "")]
+                                        (toast/error ctx clean-err)))))))))]
+
+     (m/Scaffold
+      .backgroundColor surface
+      .resizeToAvoidBottomInset false
+
+      .appBar
+      (m/AppBar
+       .elevation 0.0
+       .backgroundColor surface
+       .title (m/Text (if is-editing? "Засварлах" "") .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0 .color onSurfaceVariant))
+       .actions
+       [(f/widget
+         :watch [uploading? !uploading?]
+         (if uploading?
+           (m/Padding .padding (m/EdgeInsets.all 14.0) .child (m/SizedBox .width 20.0 .height 20.0 .child (m/CircularProgressIndicator .strokeWidth 2.0)))
+           (m/IconButton .icon (m/Icon m.Icons/image_outlined) .onPressed #())))
+        
+        (m/IconButton 
+         .icon (m/Icon m.Icons/add_link) 
+         .tooltip "Нийтлэл/Хэсэг холбох"
+         .onPressed (fn [] 
+                      (ref-search/show-dialog! ctx !editor-state)
+                      nil))
+        
+        (f/widget
+         :watch [state !editor-state]
+         (m/Row
+          .mainAxisSize m/MainAxisSize.min
+          .children
+          [(m/IconButton .icon (m/Icon m.Icons/undo) .onPressed (if (empty? (get-in state [:history :undo-stack])) nil (fn [] (history/undo! !editor-state) nil)))
+           (m/IconButton .icon (m/Icon m.Icons/redo) .onPressed (if (empty? (get-in state [:history :redo-stack])) nil (fn [] (history/redo! !editor-state) nil)))]))
+        
+        (f/widget
+         :watch [publishing? !publishing?]
+         (m/Padding
+          .padding (m/EdgeInsets.symmetric .vertical 8.0 .horizontal 16.0)
+          .child
+          (m/ElevatedButton
+           .style (m/ElevatedButton.styleFrom .backgroundColor primary .foregroundColor m.Colors/white)
+           .onPressed (if publishing? nil (fn [] (publish!) nil))
+           .child (if publishing?
+                    (m/SizedBox .width 16.0 .height 16.0 .child (m/CircularProgressIndicator .color m.Colors/white .strokeWidth 2.0))
+                    (m/Text (if is-editing? "Хадгалах" "Нийтлэх") .style (m/TextStyle .fontFamily "OyunQaganTig"))))))])
+
+      .body
+      (m/SafeArea
+       .child
+       (editor/mongol-editor
+        !editor-state
+        
+        ;; 🌟 HERE: Combine default configurations with custom rendering rules
+        (merge defaults/full-default-config {:custom-block-renderers ref-cards/nomio-custom-renderers})
+        
+        :leading-widget
+        (m/Container
+         .width 80.0
+         .decoration (m/BoxDecoration .border (m/Border .right (m/BorderSide .color outlineVariant .width 1.0)))
+         .padding (m/EdgeInsets.only .left 20.0 .top 20.0 .right 8.0)
+         .child
+         (custom-tf/text-field
+          !editor-state
+          {:controller title-ctrl
+           :focus-node title-focus-node
+           :hint "Гарчиг (Заавал биш)"
+           :max-lines 1
+           :on-submitted (fn [_]
+                           (when-let [first-id (first (:root @!editor-state))]
+                             (editor-cmd/focus-block !editor-state first-id 0)))
+           :style (m/TextStyle .fontSize 20.0 .fontWeight m.FontWeight/bold .fontFamily "OyunQaganTig")}))))))))

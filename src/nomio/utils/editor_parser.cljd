@@ -1,0 +1,141 @@
+(ns nomio.utils.editor-parser
+  "Utility for converting between the rich text editor's internal state and the backend API format.")
+
+;; =============================================================================
+;; Helper Functions: Handle key type conversions for rich text attributes
+;; The editor engine uses Keywords (e.g., :bold), but JSON communication requires Strings (e.g., "bold").
+;; =============================================================================
+
+(defn- parse-attrs-to-api 
+  "Converts {:bold true, :italic true} to {\"bold\" true, \"italic\" true}."
+  [attrs]
+  (reduce-kv (fn [m k v] 
+               (assoc m (name k) v)) 
+             {} 
+             (or attrs {})))
+
+(defn- parse-attrs-from-api 
+  "Converts {\"bold\" true} to {:bold true}."
+  [attrs]
+  (reduce-kv (fn [m k v] 
+               (assoc m (keyword k) v)) 
+             {} 
+             (or attrs {})))
+
+;; =============================================================================
+;; Core Conversion Logic
+;; =============================================================================
+
+(defn state->api-blocks
+  "[Post Serialization] Converts the rich text editor's internal state into the JSON array structure expected by the Nomio API."
+  [editor-state]
+  (let [root-ids (:root editor-state)
+        blocks-map (:blocks editor-state)]
+    (mapv (fn [id]
+            (let [block (get blocks-map id)
+                  block-type (name (:type block))]
+              (if (= block-type "image")
+                ;; Handle image blocks
+                {"type" "image"
+                 "id" id
+                 "url" (get-in block [:data :url] "")}
+                
+                ;; Handle text and reference blocks
+                (let [base-payload {"type" block-type
+                                    "id" id
+                                    "text" (:content block "")}
+                      
+                      ;; FIX 1: Intercept reference cards to extract their IDs and inject them into the backend JSON payload.
+                      payload (cond-> base-payload
+                                (= block-type "post-quote")
+                                (assoc "ref_post_id" (get-in block [:data :ref-post-id]))
+                                
+                                (= block-type "block-ref")
+                                (assoc "ref_post_id" (get-in block [:data :ref-post-id])
+                                       "ref_block_id" (get-in block [:data :ref-block-id])))]
+                  
+                  ;; If the text block contains rich text styles (bold, underline, etc.), append the spans array
+                  (if (seq (:content-spans block))
+                    (assoc payload "spans"
+                           (mapv (fn [span]
+                                   {"start" (:start span)
+                                    "end" (:end span)
+                                    "attrs" (parse-attrs-to-api (:attrs span))})
+                                 (:content-spans block)))
+                    payload)))))
+          root-ids)))
+
+(defn api-blocks->state
+  "[Draft Deserialization] Restores the JSON array structure received from the backend into the !state initialization data required by the rich text editor."
+  [api-blocks]
+  (let [api-blocks (or api-blocks [])
+        ;; 1. Extract all IDs to build the ordered root array
+        root (mapv #(get % "id") api-blocks)
+        
+        ;; 2. Build the Blocks map
+        blocks (reduce (fn [acc b]
+                         (let [id (get b "id")
+                               b-type (keyword (get b "type" "paragraph"))]
+                           (cond
+                             ;; Restore image block
+                             (= b-type :image)
+                             (assoc acc id
+                                    {:id id
+                                     :type b-type
+                                     :data {:url (get b "url" "")}
+                                     :children []
+                                     :attributes {}})
+                                     
+                             ;; FIX 2: Intercept reference blocks from the backend and rebuild their IDs into the editor's :data map.
+                             (or (= b-type :post-quote) (= b-type :block-ref))
+                             (assoc acc id
+                                    {:id id
+                                     :type b-type
+                                     :content (get b "text" "")
+                                     :content-spans []
+                                     :data {:ref-post-id (get b "ref_post_id")
+                                            :ref-block-id (get b "ref_block_id")}
+                                     :children []
+                                     :attributes {}})
+                                     
+                             ;; Restore standard text block
+                             :else
+                             (assoc acc id
+                                    {:id id
+                                     :type b-type
+                                     :content (get b "text" "")
+                                     :content-spans (mapv (fn [span]
+                                                            {:start (get span "start")
+                                                             :end (get span "end")
+                                                             :attrs (parse-attrs-from-api (get span "attrs" {}))})
+                                                          (get b "spans" []))
+                                     :children []
+                                     :attributes {}}))))
+                       {}
+                       api-blocks)]
+    
+    ;; 3. Return the complete editor state model
+    {:root root
+     :blocks blocks
+     :active-block-id nil
+     :cursor-visible false
+     :history {:undo-stack [] :redo-stack [] :max-depth 100}}))
+
+;; =============================================================================
+;; Content Analysis & Tag Extraction
+;; =============================================================================
+
+(defn extract-tags-from-blocks
+  "Extracts unique tags starting with '#' from the formatted API blocks.
+   Ignores whitespace and common punctuation after the tag."
+  [blocks]
+  (let [;; 1. Filter out non-text blocks (like images)
+        text-blocks (filter #(not= (get % "type") "image") blocks)
+        ;; 2. Concatenate all text into a single string
+        full-text (apply str (map #(get % "text" "") text-blocks))
+        ;; 3. Regex: Matches '#' followed by non-whitespace and non-punctuation characters
+        matches (re-seq #"#([^\s#\.,!\?]+)" full-text)]
+    
+    ;; 'matches' is a sequence of vectors like (["#Flutter" "Flutter"] ["#Mongol" "Mongol"])
+    ;; We map 'second' to get just the word, pass to 'set' to remove duplicates, and return a 'vec'
+    (vec (set (map second matches)))))

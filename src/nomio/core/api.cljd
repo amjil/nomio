@@ -1,0 +1,288 @@
+(ns nomio.core.api
+  "Nomio platform core network layer: handles all communication with the Elixir backend."
+  (:require
+   ["package:http/http.dart" :as http]
+   ["dart:convert" :as convert]
+   [clojure.string :as str]
+   [nomio.core.state :as state]))
+
+;; =============================================================================
+;; Base Configuration
+;; =============================================================================
+
+;; Local development address (standard for Android emulators/local network)
+(def base-url "http://100.64.0.6:4000/api")
+
+;; =============================================================================
+;; Helper Functions: Headers & Response Handling
+;; =============================================================================
+
+(defn- get-auth-headers
+  "Returns standard JSON headers, injecting the Bearer token from global state."
+  []
+  (let [base-headers {"Content-Type" "application/json"}
+        token (state/current-token)]
+    (if (not (str/blank? token))
+      (assoc base-headers "Authorization" (str "Bearer " token))
+      base-headers)))
+
+(defn- parse-response
+  "Parses the HTTP response. Returns the 'data' field or the raw map on success.
+   Throws a clean Exception with details on failure."
+  [^http/Response resp]
+  (let [status (.-statusCode resp)
+        body-str (.-body resp)
+        json-data (try
+                    (if (str/blank? body-str) {} (convert/jsonDecode body-str))
+                    (catch Exception _ {}))]
+    (if (and (>= status 200) (< status 300))
+      ;; Backend usually wraps results in a "data" key
+      (get json-data "data" json-data)
+
+      ;; Handle error extraction
+      (let [err-type (get json-data "error")
+            details (get json-data "details")
+            detail-str (when details
+                         (str/join "\n"
+                                   (for [k (.-keys details)]
+                                     (let [v (get details k)
+                                           err-val (if (coll? v) (first v) v)]
+                                       (str k ": " err-val)))))
+            error-msg (cond
+                        (not (str/blank? detail-str)) detail-str
+                        (not (str/blank? err-type)) err-type
+                        :else (str "API Error (" status ")"))]
+        (throw (Exception. error-msg))))))
+
+;; =============================================================================
+;; 0. Authentication (Auth)
+;; =============================================================================
+
+(defn ^:async login
+  "Authenticates a user via email and password."
+  [payload]
+  (let [uri (Uri/parse (str base-url "/auth/login"))
+        headers {"Content-Type" "application/json"}
+        api-payload {"email" (or (:email payload) (get payload "email"))
+                     "password" (or (:password payload) (get payload "password"))}
+        body (convert/jsonEncode api-payload)
+        resp (await (http/post uri .headers headers .body body))]
+    (parse-response resp)))
+
+(defn ^:async register
+  "Registers a new user account."
+  [payload]
+  (let [uri (Uri/parse (str base-url "/auth/register"))
+        headers {"Content-Type" "application/json"}
+        api-payload {"username" (or (:username payload)
+                                    (get payload "username")
+                                    (:handle payload)
+                                    (get payload "handle"))
+                     "nickname" (or (:nickname payload)
+                                    (get payload "nickname")
+                                    (:display-name payload)
+                                    (get payload "display_name")
+                                    (:name payload)
+                                    (get payload "name"))
+                     "email" (or (:email payload) (get payload "email"))
+                     "password" (or (:password payload) (get payload "password"))}
+        body (convert/jsonEncode api-payload)
+        resp (await (http/post uri .headers headers .body body))]
+    (parse-response resp)))
+
+(defn ^:async fetch-me
+  "Fetches current user profile by token."
+  []
+  (let [uri (Uri/parse (str base-url "/users/me"))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+;; =============================================================================
+;; 1. Posts & References
+;; =============================================================================
+
+(defn ^:async fetch-posts
+  "Fetches a list of posts, supports pagination via query params."
+  [& {:keys [page limit] :or {page 1 limit 10}}]
+  (let [uri (Uri/parse (str base-url "/posts?page=" page "&limit=" limit))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async fetch-post
+  "Fetches detailed data for a single post."
+  [post-id]
+  (let [uri (Uri/parse (str base-url "/posts/" post-id))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async create-post
+  "Publishes a new post. Author identity is handled by Token on backend.
+   Backend will automatically parse 'blocks' for references (ref_post_id/ref_block_id)."
+  [payload]
+  (let [uri (Uri/parse (str base-url "/posts"))
+        api-payload {"title" (or (:title payload) (get payload "title"))
+                     "blocks" (or (:blocks payload) (get payload "blocks"))
+                     "tags" (or (:tags payload) (get payload "tags") [])}
+        body (convert/jsonEncode api-payload)
+        resp (await (http/post uri .headers (get-auth-headers) .body body))]
+    (parse-response resp)))
+
+(defn ^:async update-post
+  "Updates an existing post. Requires Authorization Token."
+  [post-id payload]
+  (let [uri (Uri/parse (str base-url "/posts/" post-id))
+        api-payload {"title" (or (:title payload) (get payload "title"))
+                     "blocks" (or (:blocks payload) (get payload "blocks"))
+                     "tags" (or (:tags payload) (get payload "tags") [])}
+        body (convert/jsonEncode api-payload)
+        resp (await (http/put uri .headers (get-auth-headers) .body body))]
+    (parse-response resp)))
+    
+(defn ^:async delete-post
+  "Deletes an existing post. User must be the author of the post."
+  [post-id]
+  (let [uri (Uri/parse (str base-url "/posts/" post-id))
+        resp (await (http/delete uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+;; 🌟 NEW: Fetch Outbound References
+(defn ^:async fetch-outbound-references
+  "Retrieves all posts and blocks that the specified post quotes or references."
+  [post-id]
+  (let [uri (Uri/parse (str base-url "/posts/" post-id "/references/outbound"))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+;; 🌟 NEW: Fetch Inbound References
+(defn ^:async fetch-inbound-references
+  "Retrieves all posts and blocks that quote or reference the specified post (Backlinks)."
+  [post-id]
+  (let [uri (Uri/parse (str base-url "/posts/" post-id "/references/inbound"))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+;; =============================================================================
+;; 2. Comments
+;; =============================================================================
+
+(defn ^:async fetch-comments
+  "Retrieves the comment tree for a specific post."
+  [post-id]
+  (let [uri (Uri/parse (str base-url "/posts/" post-id "/comments"))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async create-comment
+  "Creates a new comment or reply. User ID extracted from Token by backend."
+  [payload]
+  (let [uri (Uri/parse (str base-url "/comments"))
+        api-payload {"post_id" (or (:post-id payload) (get payload "post_id"))
+                     "content" (or (:content payload) (get payload "content"))
+                     "parent_id" (or (:parent-id payload) (get payload "parent_id"))}
+        body (convert/jsonEncode api-payload)
+        resp (await (http/post uri .headers (get-auth-headers) .body body))]
+    (parse-response resp)))
+
+(defn ^:async delete-comment
+  "Deletes a comment. User must be the author of the comment."
+  [comment-id]
+  (let [uri (Uri/parse (str base-url "/comments/" comment-id))
+        resp (await (http/delete uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+;; =============================================================================
+;; 3. Interactions
+;; =============================================================================
+
+(defn ^:async toggle-like
+  "Toggles the like status for a post."
+  [post-id]
+  (let [uri (Uri/parse (str base-url "/posts/" post-id "/like"))
+        resp (await (http/post uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async toggle-bookmark
+  "Toggles the bookmark status for a post."
+  [post-id]
+  (let [uri (Uri/parse (str base-url "/posts/" post-id "/bookmark"))
+        resp (await (http/post uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+;; =============================================================================
+;; 4. User Profiles & Social
+;; =============================================================================
+
+(defn ^:async fetch-user-posts
+  "Fetches posts published by a specific user. (No pagination supported by backend)"
+  [user-id]
+  (let [uri (Uri/parse (str base-url "/users/" user-id "/posts"))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async fetch-user-bookmarks
+  "Fetches posts bookmarked by a specific user. (No pagination supported by backend)"
+  [user-id]
+  (let [uri (Uri/parse (str base-url "/users/" user-id "/bookmarks"))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+;; =============================================================================
+;; 5. Media Uploads
+;; =============================================================================
+
+(defn ^:async upload-image
+  "Uploads an image file using multipart/form-data. Requires Token."
+  [^String file-path]
+  (let [uri (Uri/parse (str base-url "/uploads/images"))
+        req (http/MultipartRequest. "POST" uri)
+        file (await (http/MultipartFile.fromPath "file" file-path))
+        token (state/current-token)]
+    
+    ;; Set Auth Token manually for MultipartRequest
+    (when (not (str/blank? token))
+      (.addAll (.-headers req) {"Authorization" (str "Bearer " token)}))
+
+    (.add (.-files req) file)
+
+    (let [resp-stream (await (.send req))
+          resp-str (await (.bytesToString resp-stream))
+          body (convert/jsonDecode resp-str)]
+      (if (= (.-statusCode resp-stream) 200)
+        (get-in body ["data" "url"] (get body "url"))
+        (throw (Exception. (str "Image upload failed: " resp-str)))))))
+
+;; =============================================================================
+;; 6. Topic Exploration
+;; =============================================================================
+
+(defn ^:async fetch-topic-posts
+  "Fetches posts tagged with a specific topic."
+  [tag & {:keys [page limit] :or {page 1 limit 10}}]
+  (let [encoded-tag (Uri/encodeComponent tag)
+        uri (Uri/parse (str base-url "/posts?tag=" encoded-tag "&page=" page "&limit=" limit))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+
+(defn ^:async search-posts
+  "Searches posts by a keyword query."
+  [q & {:keys [page limit] :or {page 1 limit 10}}]
+  (let [encoded-q (Uri/encodeComponent q)
+        uri (Uri/parse (str base-url "/search/posts?q=" encoded-q "&page=" page "&limit=" limit))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async search-blocks
+  "Searches blocks by a keyword query."
+  [q & {:keys [page limit] :or {page 1 limit 20}}]
+  (let [encoded-q (Uri/encodeComponent q)
+        uri (Uri/parse (str base-url "/search/blocks?q=" encoded-q "&page=" page "&limit=" limit))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async fetch-hot-tags
+  "Fetches the list of trending tags from the server."
+  [& {:keys [limit] :or {limit 10}}]
+  (let [uri (Uri/parse (str base-url "/tags/hot?limit=" limit))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))

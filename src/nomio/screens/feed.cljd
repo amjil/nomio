@@ -1,0 +1,179 @@
+(ns nomio.screens.feed
+  "Home feed: Includes auth interception to redirect unauthenticated users to the login screen, and a search action to access the explore page."
+  (:require
+   ["package:flutter/material.dart" :as m]
+   ["package:mongol/mongol.dart" :as mgl]
+   [cljd.flutter :as f]
+   [nomio.core.api :as api]
+   [nomio.core.state :as state]
+   [nomio.widgets.post-card :as post-card]
+   [nomio.utils.responsive :as responsive]))
+
+;; =============================================================================
+;; Main Screen: Post Feed
+;; =============================================================================
+
+(defn feed-screen []
+  (let [!posts (atom [])
+        !page (atom 1)
+        !has-more? (atom true)
+        !loading? (atom false)
+        page-limit 10
+
+        load-posts!
+        (fn [is-refresh?]
+          (when is-refresh?
+            (reset! !page 1)
+            (reset! !has-more? true))
+
+          (when (and (not @!loading?) @!has-more?)
+            (reset! !loading? true)
+            (-> (api/fetch-posts :page @!page :limit page-limit)
+                (.then (fn [new-items]
+                         ;; Safety check to ensure items is a valid collection even if API returns nil
+                         (let [items (if new-items new-items [])]
+                           ;; Update the posts list
+                           (if is-refresh?
+                             (reset! !posts items)
+                             (swap! !posts concat items))
+
+                           ;; If the returned items are fewer than the limit, we've reached the end
+                           (if (< (count items) page-limit)
+                             (reset! !has-more? false)
+                             (swap! !page inc))
+
+                           (reset! !loading? false))))
+                (.catchError (fn [err]
+                               (reset! !loading? false)
+                               ;; Failsafe: Prevent infinite pagination spinners on network/API errors
+                               (reset! !has-more? false)
+                               (dart:core/print (str "Feed error: " err)))))))]
+
+    ;; Called exactly once when the Widget instance is created
+    (load-posts! true)
+
+    (f/widget
+     :context ctx
+
+     ;; Managed scroll controller for pagination
+     :managed [scroll-ctrl
+               (let [ctrl (m/ScrollController.)]
+                 (.addListener ctrl
+                               (fn []
+                                 (when (and (.-hasClients ctrl) (not @!loading?) @!has-more?)
+                                   (let [pos (.-position ctrl)
+                                         current-pixels (.-pixels pos)
+                                         max-pixels (.-maxScrollExtent pos)]
+                                     ;; Trigger load-more when scrolled within 200 pixels of the end
+                                     (when (>= current-pixels (- max-pixels 200))
+                                       (load-posts! false))))))
+                 ctrl)]
+
+     ;; Watch global state for auth status and local state for UI updates
+     :watch [app-state state/!app-state
+             posts !posts
+             loading? !loading?
+             has-more? !has-more?]
+
+     :let [;; Check if user is logged in
+           logged-in? (some? (:current-user app-state))
+
+           ;; Auth Interceptor: Redirect to login if not authenticated
+           handle-auth-action!
+           (fn [target-route success-callback]
+             (if-not logged-in?
+               (m/Navigator.pushNamed ctx "/login")
+               (if success-callback
+                 (success-callback)
+                 (m/Navigator.pushNamed ctx target-route)))
+             nil)
+
+           posts-count (count posts)
+
+           ;; Use `cond` for crystal clear and mutually exclusive UI states
+           feed-list-view
+           (cond
+             ;; State A: Initial loading with no data
+             (and (zero? posts-count) loading?)
+             (m/Center .child (m/CircularProgressIndicator))
+
+             ;; State B: Finished loading but database is empty
+             (zero? posts-count)
+             (m/Center .child (mgl/MongolText "Одоогоор нийтлэл алга байна"
+                                              .style (m/TextStyle .fontFamily "OyunQaganTig" .color m.Colors/grey)))
+
+             ;; State C: Data exists, render the ListView
+             :else
+             (m/ListView.builder
+              .controller scroll-ctrl
+              .scrollDirection m.Axis/horizontal
+              .padding (m/EdgeInsets.all 20.0)
+              ;; Add 1 extra item for the loading indicator ONLY if has-more? is true
+              .itemCount (+ posts-count (if has-more? 1 0))
+              .itemBuilder
+              (fn [_ i]
+                (if (< i posts-count)
+                  (let [post (nth posts i)
+                        post-id (get post "id")]
+                    (m/Padding
+                     .padding (m/EdgeInsets.only .right 16.0)
+                     .child
+                     (m/SizedBox
+                      .width 160.0
+                      .child
+                      (post-card/post-card
+                       {:post post
+                        ;; Unified navigation logic: always push to detail page
+                        :on-tap (fn []
+                                  (m/Navigator.pushNamed ctx "/post" .arguments {:id post-id})
+                                  nil)}))))
+                  ;; The pagination loading indicator at the end of the list
+                  (m/Container
+                   .width 100.0
+                   .child (m/Center .child (m/CircularProgressIndicator .strokeWidth 2.0)))))))]
+
+     (responsive/layout
+      {:mobile
+       (m/Scaffold
+        .appBar
+        (m/AppBar
+         .title (m/Text "Nomio" .style (m/TextStyle .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold))
+         .centerTitle false
+         .actions
+         [;; 🌟 NEW: Search button navigating to explore screen
+          (m/IconButton .icon (m/Icon m.Icons/search) .tooltip "Хайх" .onPressed (fn [] (m/Navigator.pushNamed ctx "/explore") nil))
+          (m/IconButton .icon (m/Icon m.Icons/refresh) .onPressed #(load-posts! true))
+          ;; Icon changes based on auth state
+          (m/IconButton .icon (m/Icon (if logged-in? m.Icons/account_circle m.Icons/login))
+                        .onPressed #(handle-auth-action! "/profile" nil))])
+
+        .floatingActionButton
+        (m/FloatingActionButton
+         ;; Intercept create action, reload feed if post is created successfully
+         .onPressed #(handle-auth-action! "/create" (fn []
+                                                      (-> (m/Navigator.pushNamed ctx "/create")
+                                                          (.then (fn [_] (load-posts! true))))))
+         .child (m/Icon m.Icons/add))
+
+        .body
+        (m/SafeArea .child feed-list-view))
+
+       :desktop
+       (m/Scaffold
+        .appBar
+        (m/AppBar
+         .title (m/Text "Nomio" .style (m/TextStyle .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold))
+         .actions
+         [;; 🌟 NEW: Search button navigating to explore screen
+          (m/IconButton .icon (m/Icon m.Icons/search) .tooltip "Хайх" .onPressed (fn [] (m/Navigator.pushNamed ctx "/explore") nil))
+          (m/IconButton .icon (m/Icon m.Icons/refresh) .onPressed #(load-posts! true))
+          (m/IconButton .icon (m/Icon m.Icons/edit)
+                        .onPressed #(handle-auth-action! "/create" (fn []
+                                                                     (-> (m/Navigator.pushNamed ctx "/create")
+                                                                         (.then (fn [_] (load-posts! true)))))))
+          (m/IconButton .icon (m/Icon (if logged-in? m.Icons/account_circle m.Icons/login))
+                        .onPressed #(handle-auth-action! "/profile" nil))
+          (m/SizedBox .width 16.0)])
+        .body
+        ;; Full screen list view for desktop, removing the right-side detail panel
+        (m/SafeArea .child feed-list-view))}))))

@@ -1,0 +1,185 @@
+(ns nomio.screens.post-comments
+  "Dedicated Comments Screen: A full-screen horizontal canvas for deep comment trees."
+  (:require
+   ["package:flutter/material.dart" :as m]
+   ["package:mongol/mongol.dart" :as mgl]
+   ["dart:core" :as dc]
+   [cljd.flutter :as f]
+   [clojure.string :as str]
+   [nomio.core.api :as api]
+   [nomio.core.state :as state]
+   [nomio.widgets.comment-tree :as comment-tree]
+   [components.toast :as toast]))
+
+;; =============================================================================
+;; Comment Reply Modal (Bottom sheet invoked within the new screen)
+;; =============================================================================
+(defn- show-reply-dialog!
+  [ctx post-id parent-comment on-success]
+  (let [ctrl (m/TextEditingController.)
+        !submitting? (atom false)
+        parent-id (get parent-comment "id")
+        parent-label (or (get parent-comment "nickname")
+                         (get parent-comment "username")
+                         (let [uid (get parent-comment "user_id")]
+                           (when uid (str "Хэрэглэгч " uid))))]
+
+    (m/showModalBottomSheet
+     .context ctx
+     .isScrollControlled true
+     .backgroundColor m.Colors/transparent
+     .builder
+     (fn [sheet-ctx]
+       (f/widget
+        :get {{{:flds [surface primary outlineVariant onSurfaceVariant]} .-colorScheme} m/Theme}
+        :watch [submitting? !submitting?]
+
+        (m/Padding
+         .padding (m/EdgeInsets.only .bottom (.-bottom (m/MediaQuery.viewInsetsOf sheet-ctx)))
+         .child
+         (m/Container
+          .height 320.0
+          .decoration (m/BoxDecoration
+                       .color surface
+                       .borderRadius (m/BorderRadius.vertical .top (m/Radius.circular 20.0)))
+          .padding (m/EdgeInsets.all 20.0)
+          .child
+          (m/Row
+           .mainAxisSize m.MainAxisSize/max
+           .crossAxisAlignment m.CrossAxisAlignment/start
+           .children
+           [(mgl/MongolText
+             (if parent-comment
+              (str (or parent-label "тодорхойгүй") "-д\nхариулах:") 
+               "Сэтгэгдэл\nүлдээх:") 
+             .style (m/TextStyle .fontFamily "OyunQaganTig" .color onSurfaceVariant .fontWeight m.FontWeight/bold))
+
+            (m/SizedBox .width 20.0)
+
+            (m/Expanded
+             .child
+             (mgl/MongolTextField
+              .controller ctrl
+              .maxLines nil
+              .expands true
+              .textAlign mgl/MongolTextAlign.top
+              .decoration (m/InputDecoration
+                           .hintText "Энд бичнэ үү..." 
+                           .hintStyle (m/TextStyle .fontFamily "OyunQaganTig")
+                           .border (m/OutlineInputBorder .borderRadius (m/BorderRadius.circular 12.0))
+                           .focusedBorder (m/OutlineInputBorder
+                                           .borderSide (m/BorderSide .color primary .width 2.0)
+                                           .borderRadius (m/BorderRadius.circular 12.0)))))
+
+            (m/SizedBox .width 20.0)
+
+            (mgl/MongolElevatedButton
+             .style (m/ElevatedButton.styleFrom
+                     .backgroundColor primary
+                     .foregroundColor m.Colors/white
+                     .padding (m/EdgeInsets.symmetric .vertical 24.0 .horizontal 8.0)
+                     .shape (m/RoundedRectangleBorder .borderRadius (m/BorderRadius.circular 28.0)))
+             .onPressed
+             (fn []
+               (let [text (.-text ctrl)]
+                 (when (and (not @!submitting?) (not (str/blank? text)))
+                   (reset! !submitting? true)
+                   (-> (api/create-comment {:post-id post-id
+                                            :content text
+                                            :parent-id parent-id})
+                       (.then (fn [_]
+                                (m/Navigator.pop sheet-ctx)
+                                (toast/success ctx "Амжилттай нийтлэгдлээ")
+                                (on-success)))
+                       (.catchError (fn [err]
+                                      (reset! !submitting? false)
+                                      (toast/error ctx (str "Алдаа гарлаа: " err))))))))
+             .child (if @!submitting?
+                      (m/SizedBox .width 20.0 .height 20.0 .child (m/CircularProgressIndicator .color m.Colors/white .strokeWidth 2.0))
+                      (mgl/MongolText "Илгээх" .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0))))]))))))))
+
+;; =============================================================================
+;; Main Comments View
+;; =============================================================================
+(defn post-comments-screen [post-id]
+  (let [!comments (atom [])
+        !loading? (atom true)
+
+        load-data!
+        (fn []
+          (reset! !loading? true)
+          (-> (api/fetch-comments post-id)
+              (.then (fn [comments-data]
+                       (reset! !comments (vec (or comments-data [])))
+                       (reset! !loading? false)))
+              (.catchError (fn [_err]
+                             (reset! !loading? false)))))]
+
+    ;; Trigger initial fetch
+    (load-data!)
+
+    (f/widget
+     :context ctx
+     :get {{{:flds [surface onSurface onSurfaceVariant primary]} .-colorScheme} m/Theme}
+     :watch [comments !comments
+             loading? !loading?]
+
+     (m/Scaffold
+      .backgroundColor surface
+      .appBar
+      (m/AppBar
+       .elevation 0.0
+       .backgroundColor surface
+       .title (m/Text "Сэтгэгдэл" .style (m/TextStyle .fontFamily "OyunQaganTig" .color onSurface))
+       .leading (m/IconButton .icon (m/Icon m.Icons/arrow_back .color onSurface)
+                              .onPressed #(m/Navigator.pop ctx)))
+      
+      ;; Floating Action Button for adding a top-level comment
+      .floatingActionButton
+      (m/FloatingActionButton
+       .onPressed (fn []
+                    (if (state/current-user-id)
+                      (show-reply-dialog! ctx post-id nil load-data!)
+                      (m/Navigator.pushNamed ctx "/login"))
+                    nil)
+       .backgroundColor primary
+       .child (m/Icon m.Icons/add_comment .color m.Colors/white))
+
+      .body
+      (m/SafeArea
+       .child
+       (if loading?
+         (m/Center .child (m/CircularProgressIndicator))
+         (m/ListView
+          .scrollDirection m.Axis/horizontal
+          .padding (m/EdgeInsets.only .left 24.0 .right 80.0 .top 20.0 .bottom 20.0)
+          .children
+          [(comment-tree/comment-tree
+            {:comments comments
+             :on-reply (fn [parent-comment]
+                         (if (state/current-user-id)
+                           (show-reply-dialog! ctx post-id parent-comment load-data!)
+                           (m/Navigator.pushNamed ctx "/login"))
+                         nil)
+             :on-delete (fn [comment-id]
+                          (m/showDialog
+                           .context ctx
+                           .builder
+                           (fn [dialog-ctx]
+                             (m/AlertDialog
+                              .title (m/Text "Сэтгэгдэл устгах" .style (m/TextStyle .fontFamily "OyunQaganTig"))
+                              .content (m/Text "Та энэ сэтгэгдлийг устгахдаа итгэлтэй байна уу?" .style (m/TextStyle .fontFamily "OyunQaganTig"))
+                              .actions
+                              [(m/TextButton 
+                                .onPressed #(m/Navigator.pop dialog-ctx) 
+                                .child (m/Text "Үгүй" .style (m/TextStyle .fontFamily "OyunQaganTig")))
+                               (m/TextButton
+                                .onPressed (fn []
+                                             (m/Navigator.pop dialog-ctx)
+                                             (-> (api/delete-comment comment-id)
+                                                 (.then (fn [_]
+                                                          (toast/success ctx "Амжилттай устгагдлаа")
+                                                          (load-data!)))
+                                                 (.catchError (fn [err]
+                                                                (toast/error ctx (str "Алдаа: " err))))))
+                                .child (m/Text "Устгах" .style (m/TextStyle .fontFamily "OyunQaganTig" .color m.Colors/red)))]))))})])))))))

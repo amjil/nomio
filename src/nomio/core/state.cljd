@@ -1,0 +1,68 @@
+(ns nomio.core.state
+  "Global state management for the Nomio application with local persistence."
+  (:require [cljd.flutter :as f]
+            ["package:shared_preferences/shared_preferences.dart" :as prefs]
+            ["dart:convert" :as convert]
+            ["dart:core" :as dc]))
+
+;; =============================================================================
+;; Global App State
+;; =============================================================================
+
+(defonce !app-state
+  (atom {:current-user nil
+         :theme :dark
+         :language :mn}))
+
+;; =============================================================================
+;; State Accessors & Mutators
+;; =============================================================================
+
+(defn current-user []
+  "Returns the full current user data map."
+  (:current-user @!app-state))
+
+(defn current-user-id []
+  "Safely extracts the user ID from the nested Dart JSON map.
+   API response structure: {\"token\": \"...\", \"user\": {\"id\": 1, ...}}"
+  (get-in @!app-state [:current-user "user" "id"]))
+
+(defn current-user-token []
+  "Extracts the API token for authenticated requests."
+  (get-in @!app-state [:current-user "token"]))
+
+;; 🌟 FIX: Add this alias to match the call in nomio.core.api/get-auth-headers
+(defn current-token []
+  "Alias for current-user-token to satisfy API client dependency."
+  (current-user-token))
+
+;; =============================================================================
+;; Persistence Logic
+;; =============================================================================
+
+(defn ^:async init-local-state!
+  "Reads cached user data from local storage on app startup."
+  []
+  (let [p (await (prefs.SharedPreferences/getInstance))
+        cached-user (.getString p "current_user")]
+    (when cached-user
+      (try
+        (let [user-data (convert/jsonDecode cached-user)]
+          (swap! !app-state assoc :current-user user-data)
+          (dc/print "Successfully loaded cached user data."))
+        (catch Exception e
+          (dc/print (str "Failed to parse cached user: " e)))))))
+
+(defn ^:async login!
+  "Updates the global state and persists authenticated user data to local storage."
+  [user-data]
+  (swap! !app-state assoc :current-user user-data)
+  (let [p (await (prefs.SharedPreferences/getInstance))]
+    (.setString p "current_user" (convert/jsonEncode user-data))))
+
+(defn ^:async logout!
+  "Clears user data from the global state and removes it from local storage."
+  []
+  (swap! !app-state assoc :current-user nil)
+  (let [p (await (prefs.SharedPreferences/getInstance))]
+    (.remove p "current_user")))

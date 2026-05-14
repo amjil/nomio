@@ -1,0 +1,231 @@
+(ns nomio.screens.auth
+  "Authentication screens for Login and Registration."
+  (:require ["package:flutter/material.dart" :as m]
+            ["dart:core" :as dc]
+            [cljd.flutter :as f]
+            [clojure.string :as str]
+            [nomio.core.api :as api]
+            [nomio.core.state :as state]
+            [components.toast :as toast]))
+
+;; =============================================================================
+;; 1. Login Screen
+;; =============================================================================
+
+(defn login-screen []
+  ;; Define the atom outside the widget to preserve its state across rebuilds
+  (let [!loading? (atom false)]
+    (f/widget
+     :context ctx
+     ;; Managed text controllers for email and password input
+     :managed [email-ctrl (m/TextEditingController)
+               password-ctrl (m/TextEditingController)]
+     ;; Watch the atom and extract its boolean value for UI rendering
+     :watch [loading? !loading?]
+     :get {{{:flds [primary surface onSurface]} .-colorScheme} m/Theme}
+
+     :let [do-login!
+           (fn []
+             (let [email (.-text email-ctrl)
+                   password (.-text password-ctrl)]
+               (if (or (empty? email) (empty? password))
+                 (toast/error ctx "Мэдээллээ бүрэн оруулна уу")
+                 (do
+                   ;; Mutate the atom reference using !loading?
+                   (reset! !loading? true)
+                   ;; Send JSON payload with string keys to match backend expectations
+                   (-> (api/login {"email" email "password" password})
+                       (.then (fn [user-data]
+                                (state/login! user-data)
+                                (reset! !loading? false)
+                                (toast/success ctx "Амжилттай нэвтэрлээ")
+                                ;; Navigate to home screen upon successful login
+                                (m/Navigator.pushReplacementNamed ctx "/")))
+                       (.catchError (fn [err]
+                                      (reset! !loading? false)
+                                      ;; Clean up the error message by removing the Dart "Exception: " prefix
+                                      (let [clean-err (str/replace (str err) #"^Exception: " "")]
+                                        ;; Log the error to the console for debugging
+                                        (dc/print (str "=== Login Error ===\n" clean-err))
+                                        ;; Show the dynamic error message to the user
+                                        (toast/error ctx clean-err)))))))))]
+
+     (m/Scaffold
+      .backgroundColor surface
+      .body
+      (m/SafeArea
+       .child
+       (m/Center
+        .child
+        (m/SingleChildScrollView
+         .padding (m/EdgeInsets.all 32.0)
+         .child
+         (m/Column
+          .mainAxisAlignment m.MainAxisAlignment/center
+          .crossAxisAlignment m.CrossAxisAlignment/stretch
+          .children
+          [;; App Logo or Title rendered in traditional Mongolian font
+           (m/Text "ᠨᠡᠪᠲᠡᠷᠡᠬᠦ"
+                   .textAlign m.TextAlign/center
+                   .style (m/TextStyle .fontSize 36.0 .fontWeight m.FontWeight/bold .fontFamily "OyunQaganTig"))
+           (m/SizedBox .height 48.0)
+
+           ;; Email Input Field
+           (m/TextField
+            .controller email-ctrl
+            .keyboardType m.TextInputType/emailAddress
+            .decoration (m/InputDecoration
+                         .labelText "И-мэйл хаяг"
+                         .prefixIcon (m/Icon m.Icons/email_outlined)
+                         .border (m/OutlineInputBorder .borderRadius (m/BorderRadius.circular 12.0))))
+           (m/SizedBox .height 20.0)
+
+           ;; Password Input Field
+           (m/TextField
+            .controller password-ctrl
+            .obscureText true
+            .decoration (m/InputDecoration
+                         .labelText "Нууц үг"
+                         .prefixIcon (m/Icon m.Icons/lock_outline)
+                         .border (m/OutlineInputBorder .borderRadius (m/BorderRadius.circular 12.0))))
+           (m/SizedBox .height 40.0)
+
+           ;; Login Button
+           (m/ElevatedButton
+            .style (m/ElevatedButton.styleFrom
+                    .backgroundColor primary
+                    .foregroundColor m.Colors/white
+                    .padding (m/EdgeInsets.symmetric .vertical 16.0)
+                    .shape (m/RoundedRectangleBorder .borderRadius (m/BorderRadius.circular 12.0)))
+            ;; Disable button click using the boolean loading state
+            .onPressed (if loading? nil do-login!)
+            .child (if loading?
+                     (m/SizedBox .width 24.0 .height 24.0 .child (m/CircularProgressIndicator .color m.Colors/white .strokeWidth 2.0))
+                     (m/Text "Нэвтрэх" .style (m/TextStyle .fontSize 18.0))))
+
+           (m/SizedBox .height 20.0)
+
+           ;; Navigation Link to Register Screen
+           (m/TextButton
+            .onPressed (fn [] (m/Navigator.pushNamed ctx "/register") nil)
+            .child (m/Text "Бүртгэлгүй юу? Бүртгүүлэх" .style (m/TextStyle .color primary)))]))))))))
+
+;; =============================================================================
+;; 2. Register Screen
+;; =============================================================================
+
+(defn register-screen []
+  ;; Define the atom outside the widget to preserve its state across rebuilds
+  (let [!loading? (atom false)]
+    (f/widget
+     :context ctx
+     ;; Managed text controllers for registration fields
+     :managed [handle-ctrl (m/TextEditingController)
+               nickname-ctrl (m/TextEditingController)
+               email-ctrl (m/TextEditingController)
+               password-ctrl (m/TextEditingController)]
+     ;; Watch the atom reference
+     :watch [loading? !loading?]
+     :get {{{:flds [primary surface onSurface]} .-colorScheme} m/Theme}
+
+     :let [do-register!
+           (fn []
+             (let [handle (.-text handle-ctrl)
+                   nickname (.-text nickname-ctrl)
+                   email (.-text email-ctrl)
+                   password (.-text password-ctrl)]
+               (if (or (empty? handle) (empty? nickname) (empty? email) (empty? password))
+                 (toast/error ctx "Мэдээллээ бүрэн оруулна уу")
+                 (do
+                   ;; Mutate state using the atom reference
+                   (reset! !loading? true)
+                   (-> (api/register {"username" handle
+                                      "nickname" nickname
+                                      "email" email
+                                      "password" password})
+                       (.then (fn [user-data]
+                                (state/login! user-data)
+                                (reset! !loading? false)
+                                (toast/success ctx "Амжилттай бүртгүүллээ")
+                                ;; Navigate to home screen upon successful registration
+                                (m/Navigator.pushReplacementNamed ctx "/")))
+                       (.catchError (fn [err]
+                                      (reset! !loading? false)
+                                      ;; Clean up the error message by removing the Dart "Exception: " prefix
+                                      (let [clean-err (str/replace (str err) #"^Exception: " "")]
+                                        ;; Log the error to the console for debugging
+                                        (dc/print (str "=== Register Error ===\n" clean-err))
+                                        ;; Show the dynamic error message to the user
+                                        (toast/error ctx clean-err)))))))))]
+
+     (m/Scaffold
+      .backgroundColor surface
+      .appBar (m/AppBar .backgroundColor surface .elevation 0.0)
+      .body
+      (m/SafeArea
+       .child
+       (m/Center
+        .child
+        (m/SingleChildScrollView
+         .padding (m/EdgeInsets.all 32.0)
+         .child
+         (m/Column
+          .mainAxisAlignment m.MainAxisAlignment/center
+          .crossAxisAlignment m.CrossAxisAlignment/stretch
+          .children
+          [;; App Logo or Title rendered in traditional Mongolian font
+           (m/Text "ᠪᠦᠷᠢᠳᠬᠡᠭᠦᠯᠬᠦ"
+                   .textAlign m.TextAlign/center
+                   .style (m/TextStyle .fontSize 36.0 .fontWeight m.FontWeight/bold .fontFamily "OyunQaganTig"))
+           (m/SizedBox .height 48.0)
+
+           ;; Username / Handle Input Field
+           (m/TextField
+            .controller handle-ctrl
+            .decoration (m/InputDecoration
+                         .labelText "Username / Handle"
+                         .prefixIcon (m/Icon m.Icons/alternate_email)
+                         .border (m/OutlineInputBorder .borderRadius (m/BorderRadius.circular 12.0))))
+           (m/SizedBox .height 20.0)
+
+           ;; Nickname / Display Name Input Field
+           (m/TextField
+            .controller nickname-ctrl
+            .decoration (m/InputDecoration
+                         .labelText "Nickname / Display Name"
+                         .prefixIcon (m/Icon m.Icons/person_outline)
+                         .border (m/OutlineInputBorder .borderRadius (m/BorderRadius.circular 12.0))))
+           (m/SizedBox .height 20.0)
+
+           ;; Email Input Field
+           (m/TextField
+            .controller email-ctrl
+            .keyboardType m.TextInputType/emailAddress
+            .decoration (m/InputDecoration
+                         .labelText "И-мэйл хаяг"
+                         .prefixIcon (m/Icon m.Icons/email_outlined)
+                         .border (m/OutlineInputBorder .borderRadius (m/BorderRadius.circular 12.0))))
+           (m/SizedBox .height 20.0)
+
+           ;; Password Input Field
+           (m/TextField
+            .controller password-ctrl
+            .obscureText true
+            .decoration (m/InputDecoration
+                         .labelText "Нууц үг"
+                         .prefixIcon (m/Icon m.Icons/lock_outline)
+                         .border (m/OutlineInputBorder .borderRadius (m/BorderRadius.circular 12.0))))
+           (m/SizedBox .height 40.0)
+
+           ;; Register Button
+           (m/ElevatedButton
+            .style (m/ElevatedButton.styleFrom
+                    .backgroundColor primary
+                    .foregroundColor m.Colors/white
+                    .padding (m/EdgeInsets.symmetric .vertical 16.0)
+                    .shape (m/RoundedRectangleBorder .borderRadius (m/BorderRadius.circular 12.0)))
+            ;; Disable button click using the boolean loading state
+            .onPressed (if loading? nil do-register!)
+            .child (if loading?
+                     (m/SizedBox .width 24.0 .height 24.0 .child (m/CircularProgressIndicator .color m.Colors/white .strokeWidth 2.0))
+                     (m/Text "Бүртгүүлэх" .style (m/TextStyle .fontSize 18.0))))]))))))))

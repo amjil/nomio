@@ -1,0 +1,69 @@
+(ns nomio.main
+  "App global entry point: Responsible for resource warmup, permission validation, and mounting the root view."
+  (:require
+   ["package:flutter/material.dart" :as m]
+   ["package:flutter/foundation.dart" :as foundation :refer [kIsWeb]]
+   [cljd.flutter :as f]
+   
+   ;; Nomio Core Architecture
+   [nomio.core.router :as router]
+   [nomio.core.state :as state]
+   
+   ;; Cross-platform IME Engine Dictionary Libraries
+   [virtual-keyboard.input-control :as input-control]
+   [ime-core.remote-api :as remote]
+   [ime-core.fst-engine :as fst]
+   [ime-core.next-word :as next-word]))
+
+;; =============================================================================
+;; Helper Functions
+;; =============================================================================
+
+(defn is-mobile? []
+  (let [platform foundation/defaultTargetPlatform]
+    (or (= platform foundation.TargetPlatform/android)
+        (= platform foundation.TargetPlatform/iOS))))
+
+;; =============================================================================
+;; App Entry Point
+;; =============================================================================
+
+(defn ^:async main []
+  (m.WidgetsFlutterBinding/ensureInitialized)
+
+  (await (state/init-local-state!))
+
+  (remote/set-config! {:base-url "localhost:3003"
+                       :candidate-api-path "/api/next_word/candidates"
+                       :next-word-api-path "/api/next_word/list"})
+
+  (when-not kIsWeb
+    (await (fst/ensure-loaded))
+    (await (next-word/ensure-loaded)))
+
+  (when (is-mobile?)
+    (input-control/set-control))
+
+  (f/run
+   (f/widget
+    ;; Watch global state to easily implement one-click dark/light mode toggling later
+    :watch [app-state state/!app-state]
+
+    (m/MaterialApp
+     .title "Nomio"
+     .debugShowCheckedModeBanner false
+
+     ;; Global Theme Configuration: Set traditional Mongolian font as the app's default font
+     .theme (m/ThemeData
+             .colorSchemeSeed m/Colors.blue
+             .brightness (if (= (:theme app-state) :dark)
+                           m.Brightness/dark
+                           m.Brightness/light)
+             .fontFamily "OyunQaganTig"
+             .useMaterial3 true)
+
+     ;; Routing Dispatch Center: Delegate all navigation rules to router.cljd
+     .initialRoute "/"
+     .onGenerateRoute
+     (fn [^m/RouteSettings settings]
+       (router/generate-route settings))))))

@@ -1,0 +1,24 @@
+(ns nomio.utils.responsive
+  "Responsive layout utility: Automatically switches UI rendering strategies based on screen width."
+  (:require
+   ["package:flutter/material.dart" :as m]
+   [cljd.flutter :as f]))
+
+(defn is-desktop?
+  "Helper function: Determines if the current screen width is greater than or equal to 800px."
+  [ctx]
+  (>= (.-width (.-size (m/MediaQuery.of ctx))) 800.0))
+
+(defn layout
+  "Responsive layout builder.
+   Parameters:
+   - :mobile  Widget to render when the screen width is less than 800px.
+   - :desktop Widget to render when the screen width is 800px or greater."
+  [{:keys [mobile desktop]}]
+  (f/widget
+   (m/LayoutBuilder
+    .builder
+    (fn [ctx constraints]
+      (if (< (.-maxWidth constraints) 800.0)
+        mobile
+        desktop)))))

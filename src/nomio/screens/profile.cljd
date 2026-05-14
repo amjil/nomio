@@ -1,0 +1,185 @@
+(ns nomio.screens.profile
+  "User profile: Dynamically switches between 'Self' mode (shows bookmarks) and 'Visitor' mode based on routing arguments.
+   Uses a rotated TabBar for traditional vertical layout."
+  (:require
+   ["package:flutter/material.dart" :as m]
+   ["package:mongol/mongol.dart" :as mgl]
+   [cljd.flutter :as f]
+   ["dart:core" :as dc]
+   [nomio.core.api :as api]
+   [nomio.core.state :as state]
+   [components.toast :as toast]
+   [nomio.widgets.post-card :as post-card]))
+
+;; =============================================================================
+;; 1. Posts List Component (Horizontal scrolling, fetching all at once)
+;; =============================================================================
+
+;; 🌟 FIX: Removed pagination logic because the profile APIs do not support it.
+;; Call the API functions with strictly ONE argument (user-id).
+(defn- profile-posts-list 
+  "Fetches and renders a horizontal list of posts or bookmarks for the profile."
+  [user-id list-type]
+  (let [!items (atom [])
+        !loading? (atom true)
+        
+        load-data! 
+        (fn []
+          (-> (if (= list-type :posts)
+                (api/fetch-user-posts user-id)       ;; Correct arity: 1 argument
+                (api/fetch-user-bookmarks user-id))  ;; Correct arity: 1 argument
+              (.then (fn [data]
+                       (dc/print (str "DEBUG: Profile " list-type " items count: " (count data)))
+                     (dc/print (str "DEBUG: First item raw map: " (first data)))
+                       (reset! !items (vec (or data [])))
+                       (reset! !loading? false)))
+              (.catchError (fn [_err]
+                             (reset! !loading? false)))))]
+    
+    (load-data!)
+
+    (f/widget
+     :context ctx
+     :watch [items !items
+             loading? !loading?]
+     
+     (if loading?
+       (m/Center .child (m/CircularProgressIndicator))
+       
+       (if (empty? items)
+         (m/Center .child (mgl/MongolText "Нийтлэл алга байна" .style (m/TextStyle .color m.Colors/grey .fontFamily "OyunQaganTig")))
+         
+         (m/ListView.builder
+          .scrollDirection m.Axis/horizontal
+          .padding (m/EdgeInsets.all 20.0)
+          .itemCount (count items)
+          .itemBuilder
+          (fn [_ i]
+            (let [post (nth items i)]
+              (m/Padding
+               .padding (m/EdgeInsets.only .right 16.0)
+               .child (post-card/post-card
+                       {:post post
+                        :on-tap #(m/Navigator.pushNamed ctx "/post" .arguments {:id (get post "id")})}))))))))))
+
+;; =============================================================================
+;; 2. Main Screen: User Profile
+;; =============================================================================
+
+(defn profile-screen [& [args]]
+  (let [my-id (state/current-user-id)
+        target-id (if (map? args) (:id args) my-id)
+        is-me? (= target-id my-id)
+        !target-user (atom nil)]
+    
+    ;; 🌟 FIX: Removed pagination arguments here as well
+    (when-not is-me?
+      (-> (api/fetch-user-posts target-id) 
+          (.then (fn [posts]
+                   (when-let [p (first posts)]
+                     (reset! !target-user {"nickname" (get p "author_nickname")
+                                           "username" (get p "author_username")}))))))
+    
+    (f/widget
+     :context ctx
+     :get {{{:flds [primary onSurface outlineVariant surfaceVariant error]} .-colorScheme
+            {:flds [titleLarge labelSmall]} .-textTheme} m/Theme}
+     
+     :watch [target-user !target-user]
+     
+     :let [user-info (if is-me? (state/current-user) (or target-user {}))
+           nickname (get user-info "nickname" (str "Хэрэглэгч " target-id))
+           username (get user-info "username" "user")
+           
+           handle-logout! (fn []
+                            (state/logout!)
+                            (toast/success ctx "Системээс гарлаа")
+                            (m/Navigator.pushNamedAndRemoveUntil ctx "/" (fn [_] false)))]
+     
+     (m/DefaultTabController
+      .length (if is-me? 2 1)
+      .child
+      (m/Scaffold
+       .backgroundColor (.-surface (.-colorScheme (m/Theme.of ctx)))
+       .appBar
+       (m/AppBar
+        .elevation 0.0
+        .backgroundColor (.-surface (.-colorScheme (m/Theme.of ctx)))
+        .title (m/Text (if is-me? "Миний хуудас" "Хэрэглэгчийн хуудас") 
+                       .style (m/TextStyle .fontFamily "OyunQaganTig"))
+        .leading (m/IconButton .icon (m/Icon m.Icons/arrow_back .color onSurface) .onPressed #(m/Navigator.pop ctx)))
+       
+       .body
+       (m/SafeArea
+        .child
+        (m/Row
+         .crossAxisAlignment m.CrossAxisAlignment/start
+         .children
+         [;; -------------------------------------------------------------
+          ;; A. Left Sidebar: Identity + Rotated vertical TabBar
+          ;; -------------------------------------------------------------
+          (m/Container
+           .width 120.0
+           .decoration (m/BoxDecoration .border (m/Border .right (m/BorderSide .color outlineVariant .width 0.5)))
+           .child
+           (m/Column
+            .children
+            [;; 1. User Identity (Avatar + Nickname + @Username)
+             (m/Padding
+              .padding (m/EdgeInsets.only .top 24.0 .bottom 24.0)
+              .child 
+              (m/Column
+               .children
+               [(m/CircleAvatar 
+                 .radius 28.0 
+                 .backgroundColor (.withOpacity primary 0.1)
+                 .child (m/Icon m.Icons/person .color primary .size 32.0))
+                (m/SizedBox .height 16.0)
+                (mgl/MongolText nickname
+                                .style (.copyWith titleLarge 
+                                                  .fontFamily "OyunQaganTig"
+                                                  .fontWeight m.FontWeight/bold))
+                (m/SizedBox .height 8.0)
+                (mgl/MongolText (str "@" username)
+                                .style (.copyWith labelSmall 
+                                                  .fontFamily "OyunQaganTig"
+                                                  .color outlineVariant))]))
+             
+             ;; 2. Actions (Logout for me)
+             (if is-me?
+               (m/Padding
+                .padding (m/EdgeInsets.only .bottom 24.0)
+                .child
+                (m/IconButton
+                 .icon (m/Icon m.Icons/logout .color error)
+                 .tooltip "Гарах"
+                 .onPressed handle-logout!))
+               (m/SizedBox.shrink))
+             
+             ;; 3. Rotated System TabBar
+             (m/Expanded
+              .child
+              (m/RotatedBox
+               .quarterTurns 1
+               .child (m/TabBar
+                       .isScrollable true
+                       .indicatorColor primary
+                       .dividerColor m/Colors.transparent
+                       .dividerHeight 0.0
+                       .tabs (cond-> [(m/Tab .child (m/RotatedBox 
+                                                     .quarterTurns 3 
+                                                     .child (mgl/MongolText "Нийтлэлүүд" .style (m/TextStyle .fontFamily "OyunQaganTig"))))]
+                               is-me? (conj (m/Tab .child (m/RotatedBox 
+                                                           .quarterTurns 3 
+                                                           .child (mgl/MongolText "Хадгалсан" .style (m/TextStyle .fontFamily "OyunQaganTig")))))))))]))
+
+          ;; -------------------------------------------------------------
+          ;; B. Right Content Area: System native TabBarView
+          ;; -------------------------------------------------------------
+          (m/Expanded
+           .child
+           (m/TabBarView
+            .physics (m/NeverScrollableScrollPhysics.)
+            .children
+            (cond-> [(profile-posts-list target-id :posts)]
+              is-me? (conj (profile-posts-list target-id :bookmarks)))))])))))))

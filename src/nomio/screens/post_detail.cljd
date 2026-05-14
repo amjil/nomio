@@ -1,0 +1,232 @@
+(ns nomio.screens.post-detail
+  "Post detail screen: A pure knowledge reading view for content and backlinks."
+  (:require
+   ["package:flutter/material.dart" :as m]
+   ["package:mongol/mongol.dart" :as mgl]
+   ["dart:core" :as dc]
+   [cljd.flutter :as f]
+   [nomio.core.api :as api]
+   [nomio.core.state :as state]
+   [nomio.widgets.block-renderer :as block-renderer]
+   [nomio.widgets.reaction-bar :as reaction-bar]
+   [nomio.utils.time-format :as time-format]
+   [components.tokens :as tokens]
+   [components.toast :as toast]))
+
+;; =============================================================================
+;; Helper: Convert API Backlink to standard Block Format
+;; =============================================================================
+(defn- backlink->block
+  "Transforms a raw backend backlink record into a standard block dictionary 
+   so the block-renderer can paint it natively."
+  [backlink]
+  (let [source-post-id (get backlink "source_post_id")
+        quote-type (get backlink "quote_type")
+        context-data (get backlink "context" {})
+        display-text (if (= quote-type "block")
+                       (get context-data "text" "Текст тодорхойгүй")
+                       (get context-data "title" "Гарчиггүй"))]
+    {"id" (str "backlink-" source-post-id)
+     "type" "backlink"
+     "text" display-text
+     "ref_post_id" source-post-id
+     "quote_type" quote-type}))
+
+;; =============================================================================
+;; Main Detail Screen
+;; =============================================================================
+(defn post-detail-screen
+  "Receives post-id from route, fetches data, and renders the pure reading view."
+  [post-id]
+  (let [!post (atom nil)
+        !loading-post? (atom true)
+
+        !backlinks (atom [])
+        !loading-backlinks? (atom true)
+
+        ;; 1. Function to load the main post independently
+        load-post!
+        (fn []
+          (reset! !loading-post? true)
+          (-> (api/fetch-post post-id)
+              (.then (fn [post-data]
+                       (reset! !post post-data)
+                       (reset! !loading-post? false)))
+              (.catchError (fn [_err]
+                             (reset! !loading-post? false)))))
+
+        ;; 2. Function to load backlinks independently
+        load-backlinks!
+        (fn []
+          (reset! !loading-backlinks? true)
+          (-> (api/fetch-inbound-references post-id)
+              (.then (fn [inbound-data]
+                       (reset! !backlinks (vec (or inbound-data [])))
+                       (reset! !loading-backlinks? false)))
+              (.catchError (fn [_err]
+                             ;; Silently fail and clear the loading state
+                             (reset! !loading-backlinks? false)))))]
+
+    ;; Trigger both fetches concurrently but independently
+    (load-post!)
+    (load-backlinks!)
+
+    (f/widget
+     :context ctx
+     :get {{{:flds [surface onSurface onSurfaceVariant outlineVariant primary error]} .-colorScheme
+            {:flds [headlineMedium titleSmall titleMedium]} .-textTheme} m/Theme}
+     :watch [post !post
+             loading-post? !loading-post?
+             backlinks !backlinks
+             loading-backlinks? !loading-backlinks?]
+
+     :let [;; 🌟 CORE LOGIC: Merge the actual post blocks with the injected backlink blocks
+           core-blocks (or (get post "blocks") [])
+           backlink-blocks (mapv backlink->block backlinks)
+           combined-blocks (concat core-blocks backlink-blocks)]
+
+     (m/Scaffold
+      .backgroundColor surface
+
+      .appBar
+      (m/AppBar
+       .elevation 0.0
+       .backgroundColor surface
+       .leading (m/IconButton .icon (m/Icon m.Icons/arrow_back .color onSurface)
+                              .onPressed #(m/Navigator.pop ctx))
+       .actions
+       [;; Security: Only show action buttons if current user is the author
+        (if (and post
+                 (state/current-user-id)
+                 (= (get post "author_id") (state/current-user-id)))
+          (m/Row
+           .mainAxisSize m.MainAxisSize/min
+           .children
+           [;; A. Delete Button
+            (m/IconButton
+             .icon (m/Icon m.Icons/delete_outline .color error)
+             .tooltip "Устгах"
+             .onPressed (fn []
+                          (m/showDialog
+                           .context ctx
+                           .builder
+                           (fn [dialog-ctx]
+                             (m/AlertDialog
+                              .title (m/Text "Нийтлэл устгах" .style (m/TextStyle .fontFamily "OyunQaganTig"))
+                              .content (m/Text "Та энэ нийтлэлийг устгахдаа итгэлтэй байна уу? Энэ үйлдлийг буцаах боломжгүй." .style (m/TextStyle .fontFamily "OyunQaganTig"))
+                              .actions
+                              [(m/TextButton
+                                .onPressed #(m/Navigator.pop dialog-ctx)
+                                .child (m/Text "Үгүй" .style (m/TextStyle .fontFamily "OyunQaganTig")))
+                               (m/TextButton
+                                .onPressed (fn []
+                                             (m/Navigator.pop dialog-ctx)
+                                             (-> (api/delete-post post-id)
+                                                 (.then (fn [_]
+                                                          (toast/success ctx "Амжилттай устгагдлаа")
+                                                          (m/Navigator.pop ctx)))
+                                                 (.catchError (fn [err]
+                                                                (toast/error ctx (str "Алдаа: " err))))))
+                                .child (m/Text "Устгах" .style (m/TextStyle .fontFamily "OyunQaganTig" .color error)))])))
+                          nil))
+
+            ;; B. Edit Button
+            (m/IconButton
+             .icon (m/Icon m.Icons/edit_note .color onSurface)
+             .tooltip "Засварлах"
+             .onPressed (fn []
+                          (-> (m/Navigator.pushNamed ctx "/create"
+                                                     .arguments {:edit-id (get post "id")
+                                                                 :edit-title (get post "title")
+                                                                 ;; 🌟 CRITICAL: Only send core blocks to the editor to prevent saving backlinks as actual content
+                                                                 :edit-blocks core-blocks})
+                              (.then (fn [_]
+                                       ;; Reload both post and backlinks after editing
+                                       (load-post!)
+                                       (load-backlinks!))))
+                          nil))])
+
+          ;; Fallback if not the author
+          (m/SizedBox.shrink))])
+
+      .body
+      (m/SafeArea
+       .child
+       (if loading-post?
+         (m/Center .child (m/CircularProgressIndicator))
+
+         (if (nil? post)
+           (m/Center .child (mgl/MongolText "Нийтлэл олдсонгүй" .style (m/TextStyle .color onSurfaceVariant)))
+
+           (m/ListView
+            .scrollDirection m.Axis/horizontal
+            .padding (m/EdgeInsets.only .left 24.0 .right 40.0 .top 20.0 .bottom 20.0)
+            .children
+            [;; 1. Post Header
+             (m/Row
+              .crossAxisAlignment m.CrossAxisAlignment/start
+              .children
+              [(mgl/MongolText (or (get post "title") "Гарчиггүй")
+                               .style (.copyWith headlineMedium
+                                                 .fontFamily "OyunQaganTig"
+                                                 .fontWeight m.FontWeight/bold
+                                                 .color onSurface))])
+
+             (m/SizedBox .width 32.0)
+
+             ;; 2 & 5. Unified Content Rendering (Core Text + Injected Backlinks)
+             (m/Row
+              .crossAxisAlignment m.CrossAxisAlignment/start
+              .children (into [] (keep block-renderer/render-block combined-blocks)))
+
+             (m/SizedBox .width 32.0)
+
+             ;; 3. Author Info
+             (m/InkWell
+              .onTap (fn []
+                       (m/Navigator.pushNamed ctx "/profile" .arguments {:id (get post "author_id")})
+                       nil)
+              .borderRadius (m/BorderRadius.circular 12.0)
+              .child
+              (m/Padding
+               .padding (m/EdgeInsets.all 8.0)
+               .child
+               (m/Column
+                .mainAxisAlignment m.MainAxisAlignment/start
+                .crossAxisAlignment m.CrossAxisAlignment/center
+                .children
+                [(m/CircleAvatar
+                  .radius 20.0
+                  .backgroundColor primary
+                  .child (m/Icon m.Icons/person .color m.Colors/white .size 24.0))
+                 (m/SizedBox .height 12.0)
+                 (mgl/MongolText
+                  (or (let [nickname (get post "author_nickname")
+                            username (get post "author_username")]
+                        (cond
+                          (and nickname username) (str nickname "\n@" username)
+                          nickname nickname
+                          username (str "@" username)
+                          :else nil))
+                      (str "Хэрэглэгч " (or (get post "author_id") "тодорхойгүй")))
+                  .style (.copyWith titleSmall .fontFamily "OyunQaganTig" .color primary))
+                 (m/SizedBox .height 8.0)
+                 (mgl/MongolText (or (time-format/format-relative (get post "created_at")) "")
+                                 .style (.copyWith titleSmall .fontFamily "OyunQaganTig" .color onSurfaceVariant))])))
+
+             (m/SizedBox .width 32.0)
+
+             ;; 4. Visual Divider
+             (m/Padding
+              .padding (m/EdgeInsets.symmetric .horizontal 16.0)
+              .child (m/VerticalDivider .width 1.0 .thickness 1.0 .color outlineVariant))
+
+             ;; 6. Reaction Bar
+             (m/Padding
+              .padding (m/EdgeInsets.only .left 16.0)
+              .child
+              (reaction-bar/reaction-bar
+               {:post-id post-id
+                :initial-liked? (get post "is_liked" false)
+                :initial-bookmarked? (get post "is_bookmarked" false)
+                :on-comment-tap #(m/Navigator.pushNamed ctx "/comments" .arguments {:id post-id})}))]))))))))

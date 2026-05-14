@@ -1,0 +1,70 @@
+(ns nomio.utils.time-format
+  "Time formatting utility: Converts backend ISO8601 timestamps to traditional Mongolian relative time expressions."
+  (:require
+   ["dart:core" :as dc]))
+
+(defn- pad-zero
+  "Helper function: Pads a number to two digits with a leading zero (e.g., 9 -> 09)."
+  [n]
+  (.padLeft (.toString n) 2 "0"))
+
+(defn format-relative
+  "Converts an ISO8601 time string to a relative time expression.
+   Returns formats like: 'just now', 'x mins ago', 'x hours ago', 'x days ago', or falls back to 'yyyy-MM-dd'."
+  [iso-str]
+  (if (or (nil? iso-str) (empty? iso-str))
+    ""
+    (try
+      (let [;; Parse the ISO string and convert it to the local timezone
+            date-time (.toLocal (dc/DateTime.parse iso-str))
+            now (dc/DateTime.now)
+            ;; Calculate the time difference
+            diff (.difference now date-time)
+            seconds (.-inSeconds diff)
+            minutes (.-inMinutes diff)
+            hours (.-inHours diff)
+            days (.-inDays diff)]
+        (cond
+          ;; Within 1 minute -> Just now (sayiqan)
+          (< seconds 60)
+          "ᠰᠠᠶᠢᠬᠠᠨ"
+
+          ;; Within 1 hour -> X minutes ago (minut-un emün-e)
+          (< minutes 60)
+          (str minutes " ᠮᠢᠨᠦ᠋ᠲ ᠤᠨ ᠡᠮᠦᠨ᠎ᠡ")
+
+          ;; Within 24 hours -> X hours ago (čag-un emün-e)
+          (< hours 24)
+          (str hours " ᠴᠠᠭ ᠤᠨ ᠡᠮᠦᠨ᠎ᠡ")
+
+          ;; Within 7 days -> X days ago (edür-ün emün-e)
+          (< days 7)
+          (str days " ᠡᠳᠦᠷ ᠦᠨ ᠡᠮᠦᠨ᠎ᠡ")
+
+          ;; More than 7 days, display the exact date yyyy-MM-dd
+          :else
+          (str (.-year date-time)
+               "-"
+               (pad-zero (.-month date-time))
+               "-"
+               (pad-zero (.-day date-time)))))
+
+      (catch Exception _
+        ;; Parsing failed (e.g., invalid format), return the original string to prevent crashes
+        iso-str))))
+
+(defn format-absolute
+  "Converts an ISO8601 time string to an absolute time expression (yyyy-MM-dd HH:mm)."
+  [iso-str]
+  (if (or (nil? iso-str) (empty? iso-str))
+    ""
+    (try
+      (let [date-time (.toLocal (dc/DateTime.parse iso-str))
+            y (.-year date-time)
+            M (pad-zero (.-month date-time))
+            d (pad-zero (.-day date-time))
+            h (pad-zero (.-hour date-time))
+            m (pad-zero (.-minute date-time))]
+        (str y "-" M "-" d " " h ":" m))
+      (catch Exception _
+        iso-str))))
