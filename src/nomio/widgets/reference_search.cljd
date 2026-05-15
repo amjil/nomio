@@ -1,8 +1,10 @@
 (ns nomio.widgets.reference-search
   "A dedicated widget for searching and inserting post/block references.
-   Uses a clean, flat architecture without duplicating global keyboard components to guarantee GlobalKey stability."
+   Features a perfect dynamic layout that respects the device notch (using parent context) 
+   and isolates IME wrappers for Desktop Z-index stability."
   (:require
    ["package:flutter/material.dart" :as m]
+   ["package:flutter/foundation.dart" :as foundation]
    ["package:mongol/mongol.dart" :as mgl]
    ["dart:core" :as dc]
    [cljd.flutter :as f]
@@ -10,10 +12,34 @@
    
    ;; Nomio business layer
    [nomio.core.api :as api]
-   [components.toast :as toast]))
+   [components.toast :as toast]
+
+   ;; Custom TextField (Ensure this has :key (m/ObjectKey. controller) applied in its own file)
+   [rich-editor.components.text-field :as custom-tf]
+
+   ;; Virtual Keyboard & IME dependencies
+   [shared-ime.controller :as ime-ctrl]
+   [virtual-keyboard.keyboard :as keyboard]
+   [virtual-keyboard.options :as options]
+   [shared-ime.overlay-view :as overlay]))
 
 ;; =============================================================================
-;; Isolated State for the Search Modal's input field
+;; Platform Check Utilities
+;; =============================================================================
+
+(def is-desktop? 
+  (let [p foundation/defaultTargetPlatform]
+    (or (= p foundation.TargetPlatform/macOS)
+        (= p foundation.TargetPlatform/windows)
+        (= p foundation.TargetPlatform/linux))))
+
+(defn is-mobile? []
+  (let [p foundation/defaultTargetPlatform]
+    (or (= p foundation.TargetPlatform/android)
+        (= p foundation.TargetPlatform/iOS))))
+
+;; =============================================================================
+;; Isolated State for the Search Modal
 ;; =============================================================================
 
 (defonce !ref-search-state
@@ -29,9 +55,9 @@
 ;; =============================================================================
 
 (defn- reference-search-view
-  "Top-level view component for the bottom sheet. 
-   Manages all state at the root to prevent nested widget collisions."
-  [_sheet-ctx !target-editor-state captured-active-id]
+  "Top-level view component for the bottom sheet modal.
+   Receives pre-calculated `modal-h` to guarantee it never overlaps the system notch."
+  [_sheet-ctx !target-editor-state captured-active-id modal-h]
   (let [!raw-posts (atom [])
         !loading? (atom false)
         !search-type (atom :post)
@@ -45,24 +71,29 @@
                          (-> fetch-promise
                              (.then (fn [data]
                                       (reset! !raw-posts (vec (or data [])))
-                                      (reset! !loading? false)))
+                                      (reset! !loading? false)
+                                      nil))
                              (.catchError (fn [_]
-                                            (reset! !loading? false)))))))]
+                                            (reset! !loading? false)
+                                            nil))))))]
     (f/widget
-     :key (m/ValueKey. "reference-search-root")
      :context local-ctx
      
      :managed [search-ctrl (m/TextEditingController.)
-               search-focus-node (m/FocusNode)]
-     
+               search-focus-node (m/FocusNode.)]
+               
      :get {{{:flds [surface primary outlineVariant onSurfaceVariant surfaceVariant]} .-colorScheme
             {:flds [titleMedium bodyMedium labelSmall]} .-textTheme} m/Theme}
             
      :watch [raw-posts !raw-posts
              loading? !loading?
-             search-type !search-type]
+             search-type !search-type
+             ref-search-state !ref-search-state]
      
-     :let [results raw-posts
+     :let [info (merge options/keyboard-option {:keyboard/mongol-font-family "OyunQaganTig"
+                                                :keyboard/key-container-color m/Colors.grey.shade500
+                                                :keyboard/font-size 16})
+           results raw-posts
            
            main-content
            (m/Container
@@ -85,20 +116,18 @@
                   (m/Padding
                    .padding (m/EdgeInsets.only .bottom 16.0)
                    .child
-                   (m/GestureDetector
-                    .onTap (fn [] (.requestFocus search-focus-node))
-                    .child
-                    (mgl/MongolTextField
-                     .controller search-ctrl
-                     .focusNode search-focus-node
-                     .autofocus true
-                     .maxLines 1
-                     .decoration (m/InputDecoration 
-                                  .hintText "Хайх..." 
-                                  .border m.InputBorder/none
-                                  .isDense true)
-                     .style (m/TextStyle .fontFamily "OyunQaganTig" .color onSurfaceVariant)
-                     .onSubmitted (fn [text] (do-search! (str/trim text)))))))
+                   ;; Use custom-tf so IME works correctly
+                   (custom-tf/text-field
+                    !ref-search-state
+                    {:controller search-ctrl
+                     :focus-node search-focus-node
+                     :autofocus true
+                     :hint "Хайх..."
+                     :max-lines 1
+                     :on-submitted (fn [text] 
+                                     (do-search! (str/trim text))
+                                     nil)
+                     :style (m/TextStyle .fontFamily "OyunQaganTig" .color onSurfaceVariant)})))
                  
                  (m/Container
                   .padding (m/EdgeInsets.symmetric .vertical 16.0)
@@ -108,7 +137,7 @@
                    .mainAxisSize m.MainAxisSize/min
                    .children
                    [(m/InkWell
-                     .onTap #(reset! !search-type :post)
+                     .onTap (fn [] (reset! !search-type :post) nil)
                      .child (m/Padding 
                              .padding (m/EdgeInsets.symmetric .vertical 12.0 .horizontal 4.0)
                              .child (mgl/MongolText "Нийтлэл"
@@ -116,7 +145,7 @@
                                                                       .fontWeight (if (= search-type :post) m.FontWeight/bold m.FontWeight/normal)
                                                                       .color (if (= search-type :post) primary onSurfaceVariant)))))
                     (m/InkWell
-                     .onTap #(reset! !search-type :block)
+                     .onTap (fn [] (reset! !search-type :block) nil)
                      .child (m/Padding 
                              .padding (m/EdgeInsets.symmetric .vertical 12.0 .horizontal 4.0)
                              .child (mgl/MongolText "Хэсэг"
@@ -159,20 +188,15 @@
                                                      {:id new-id :type :post-quote :data {:ref-post-id (get item "id")} :content display-title :content-spans [] :children []}
                                                      {:id new-id :type :block-ref :data {:ref-post-id (get item "post_id") :ref-block-id (get item "block_id")} :content display-title :content-spans [] :children []})
                                          
-                                         ;; Ensure the user has an empty paragraph to type into immediately after inserting
                                          empty-p {:id new-p-id :type :paragraph :content "" :content-spans [] :children []}]
                                      
                                      (swap! !target-editor-state
                                             (fn [state]
                                               (let [root (:root state)
-                                                    ;; Find the exact position using the captured ID
                                                     idx-val (loop [idx 0, coll root]
-                                                              (if (empty? coll)
-                                                                -1
-                                                                (if (= (first coll) captured-active-id)
-                                                                  idx
+                                                              (if (empty? coll) -1
+                                                                (if (= (first coll) captured-active-id) idx
                                                                   (recur (inc idx) (rest coll)))))
-                                                    
                                                     idx (if (>= idx-val 0) (inc idx-val) (count root))
                                                     new-root (vec (concat (subvec root 0 idx) [new-id new-p-id] (subvec root idx)))]
                                                 (-> state
@@ -181,7 +205,8 @@
                                                     (assoc :root new-root)
                                                     (assoc :active-block-id new-p-id)))))
                                      (toast/success local-ctx "Амжилттай холбогдлоо" :fade)
-                                     (m/Navigator.pop local-ctx)))
+                                     (m/Navigator.pop local-ctx)
+                                     nil))
                           .borderRadius (m/BorderRadius.circular 12.0)
                           .child
                           (m/Container
@@ -209,15 +234,46 @@
                              (mgl/MongolText display-subtitle
                                              .style (.copyWith labelSmall .color onSurfaceVariant .fontFamily "OyunQaganTig"))]))))))))))]))]
      
-     (m/Padding
-      .padding (m/EdgeInsets.only .bottom (.-bottom (m/MediaQuery.viewInsetsOf local-ctx)))
+     :bind {:info info}
+     
+     ;; 🌟 完美高度控制：使用传入的已扣除刘海高度的 modal-h 
+     (m/Container
+      .height modal-h
       .child
       (m/ClipRRect
        .borderRadius (m/BorderRadius.vertical .top (m/Radius.circular 20.0))
        .child
-       (m/Container
-        .height (* (.-height (m/MediaQuery.sizeOf local-ctx)) 0.9)
-        .child main-content))))))
+       (m/Scaffold
+        .backgroundColor surface
+        .resizeToAvoidBottomInset false
+        .body
+        (if (is-mobile?)
+          (m/Column
+           .children
+           [(m/Expanded
+             .child
+             (m/Stack
+              .children
+              [main-content
+               (keyboard/candidates {:widget-key (m/ValueKey. "ref-modal-cand")})]))
+            
+            ;; 🌟 底部安全区：仅避开底部的导航条/小黑条，不增加多余空隙
+            (m/SafeArea
+             .top false
+             .child
+             (keyboard/keyboard 
+              {:widget-key (m/ValueKey. "ref-modal-kb")
+               :custom-fns
+               {:on-return
+                (fn []
+                  (when-let [cb (:on-return (:external-keyboard-delegate @!ref-search-state))] (cb))
+                  nil)
+                :on-backspace
+                (fn []
+                  (when-let [cb (:on-backspace (:external-keyboard-delegate @!ref-search-state))] (cb))
+                  nil)}}))])
+          
+          (overlay/ime-global-wrapper main-content "ref-modal-ime"))))))))
 
 ;; =============================================================================
 ;; Entry Point
@@ -227,17 +283,38 @@
   "Public API to launch the reference search modal."
   [ctx !target-editor-state]
   
-  (let [captured-active-id (:active-block-id @!target-editor-state)]
+  (let [captured-active-id (:active-block-id @!target-editor-state)
+        ;; 🌟 核心修复：在真实的根级路由中获取屏幕参数，这时的 top-padding 才包含真实的刘海高度！
+        media-q (m/MediaQuery.of ctx)
+        screen-h (.-height (.-size media-q))
+        top-padding (.-top (.-padding media-q))
+        
+        ;; 给刘海下方留出 12.0 的美观间距。如果是桌面端没有刘海，则默认留出 48.0 的顶部边距。
+        safe-top (if (> top-padding 0) (+ top-padding 12.0) 48.0)
+        modal-h (- screen-h safe-top)]
+    
+    ;; Put background editor to sleep to avoid focus stealing
+    (swap! !target-editor-state assoc :active-block-id nil :cursor-visible false)
+    
     (reset! !ref-search-state 
             {:root ["search-block"]
              :blocks {"search-block" {:id "search-block" :type :paragraph :content ""}}
              :active-block-id "search-block"
              :cursor-visible true
+             :external-keyboard-delegate nil
              :history {:undo-stack [] :redo-stack [] :max-depth 100}})
              
-    (m/showModalBottomSheet
-     .context ctx
-     .isScrollControlled true
-     .backgroundColor m.Colors/transparent
-     .builder (fn [sheet-ctx]
-                (reference-search-view sheet-ctx !target-editor-state captured-active-id)))))
+    (-> (m/showModalBottomSheet
+         .context ctx
+         .isScrollControlled true
+         .backgroundColor m.Colors/transparent
+         .builder (fn [sheet-ctx]
+                    ;; 🌟 将计算好的绝对高度传递给弹窗
+                    (reference-search-view sheet-ctx !target-editor-state captured-active-id modal-h)))
+        
+        ;; Wake background editor up when modal closes
+        (.whenComplete
+         (fn []
+           (when (nil? (:active-block-id @!target-editor-state))
+             (swap! !target-editor-state assoc :active-block-id captured-active-id :cursor-visible true))
+           nil)))))
