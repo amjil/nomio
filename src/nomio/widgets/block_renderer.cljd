@@ -62,14 +62,14 @@
          spans (or (get block "spans") (get block "content-spans") [])
          image-url (or (get block "url") (get-in block ["data" "url"]) "")
          
-         ;; 🌟 终极解析器：防止后端将 data 变成了 JSON 字符串
+         ;; Ultimate parser: handle backend sending data as a JSON string
          raw-data-val (or (get block "data") (get block :data))
          raw-data (cond
                     (string? raw-data-val) (try (convert/jsonDecode raw-data-val) (catch dc/Exception _ {}))
                     raw-data-val raw-data-val
                     :else {})
                     
-         ;; 🌟 穷举所有可能的 Key 格式，无论前端下划线、中划线还是后端魔改，统统抓取
+         ;; Try all key variants (snake_case, kebab-case, backend aliases) for ref-post-id
          ref-post-id (or (get raw-data "ref-post-id")
                          (get raw-data "ref_post_id")
                          (get raw-data :ref-post-id)
@@ -85,7 +85,7 @@
       .child
       (case b-type
         ;; ------------------------------------------
-        ;; Post Quote (文章引用)
+        ;; Post Quote
         ;; ------------------------------------------
         "post-quote"
         (m/GestureDetector
@@ -94,7 +94,7 @@
                   (if ref-post-id
                     (m/Navigator.pushNamed ctx "/post" .arguments {:id ref-post-id})
                     (do 
-                      ;; 🌟 调试神器：如果丢了 ID，立刻把后端发来的 block 打印到控制台！
+                      ;; Debug: if ID is missing, log the full block payload to the console
                       (dc/print (str "🚨 [DEBUG ALARM] Missing ID! Block data is: " block))
                       (toast/error ctx "Уучлаарай, холбоосны ID олдсонгүй")))
                   nil)
@@ -119,7 +119,7 @@
                              .overflow m.TextOverflow/ellipsis))])))
 
         ;; ------------------------------------------
-        ;; Block Reference (段落块引用)
+        ;; Block Reference
         ;; ------------------------------------------
         "block-ref"
         (m/GestureDetector
@@ -152,7 +152,7 @@
                              .overflow m.TextOverflow/ellipsis))])))
 
         ;; ------------------------------------------
-        ;; Backlink (反向链接 - 动态注入)
+        ;; Backlink (dynamically injected)
         ;; ------------------------------------------
         "backlink"
         (m/GestureDetector
