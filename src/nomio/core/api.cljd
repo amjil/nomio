@@ -1,5 +1,6 @@
 (ns nomio.core.api
-  "Nomio platform core network layer: handles all communication with the Elixir backend."
+  "Nomio platform core network layer: handles all communication with the Elixir backend.
+   Includes unified parsing, authentication, content management, and Spaced Repetition System (SRS)."
   (:require
    ["package:http/http.dart" :as http]
    ["dart:convert" :as convert]
@@ -36,7 +37,7 @@
                     (if (str/blank? body-str) {} (convert/jsonDecode body-str))
                     (catch Exception _ {}))]
     (if (and (>= status 200) (< status 300))
-      ;; Backend usually wraps results in a "data" key
+      ;; Backend usually wraps results in a "data" key, or returns {"ok": true}
       (get json-data "data" json-data)
 
       ;; Handle error extraction
@@ -145,7 +146,6 @@
         resp (await (http/delete uri .headers (get-auth-headers)))]
     (parse-response resp)))
 
-;; 🌟 NEW: Fetch Outbound References
 (defn ^:async fetch-outbound-references
   "Retrieves all posts and blocks that the specified post quotes or references."
   [post-id]
@@ -153,7 +153,6 @@
         resp (await (http/get uri .headers (get-auth-headers)))]
     (parse-response resp)))
 
-;; 🌟 NEW: Fetch Inbound References
 (defn ^:async fetch-inbound-references
   "Retrieves all posts and blocks that quote or reference the specified post (Backlinks)."
   [post-id]
@@ -213,14 +212,14 @@
 ;; =============================================================================
 
 (defn ^:async fetch-user-posts
-  "Fetches posts published by a specific user. (No pagination supported by backend)"
+  "Fetches posts published by a specific user."
   [user-id]
   (let [uri (Uri/parse (str base-url "/users/" user-id "/posts"))
         resp (await (http/get uri .headers (get-auth-headers)))]
     (parse-response resp)))
 
 (defn ^:async fetch-user-bookmarks
-  "Fetches posts bookmarked by a specific user. (No pagination supported by backend)"
+  "Fetches posts bookmarked by a specific user."
   [user-id]
   (let [uri (Uri/parse (str base-url "/users/" user-id "/bookmarks"))
         resp (await (http/get uri .headers (get-auth-headers)))]
@@ -238,7 +237,6 @@
         file (await (http/MultipartFile.fromPath "file" file-path))
         token (state/current-token)]
     
-    ;; Set Auth Token manually for MultipartRequest
     (when (not (str/blank? token))
       (.addAll (.-headers req) {"Authorization" (str "Bearer " token)}))
 
@@ -263,7 +261,6 @@
         resp (await (http/get uri .headers (get-auth-headers)))]
     (parse-response resp)))
 
-
 (defn ^:async search-posts
   "Searches posts by a keyword query."
   [q & {:keys [page limit] :or {page 1 limit 10}}]
@@ -284,5 +281,147 @@
   "Fetches the list of trending tags from the server."
   [& {:keys [limit] :or {limit 10}}]
   (let [uri (Uri/parse (str base-url "/tags/hot?limit=" limit))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+;; =============================================================================
+;; 7. PKM & Spaced Repetition System (Readwise Features)
+;; =============================================================================
+
+(defn ^:async fetch-highlights
+  "Fetches highlights created by the user, supporting optional filters."
+  [& {:keys [source-type source-ref page limit] :or {page 1 limit 20}}]
+  (let [query-params (cond-> []
+                       source-type (conj (str "source_type=" (Uri/encodeComponent source-type)))
+                       source-ref  (conj (str "source_ref=" (Uri/encodeComponent source-ref)))
+                       true        (conj (str "page=" page))
+                       true        (conj (str "limit=" limit)))
+        query-str (str/join "&" query-params)
+        uri (Uri/parse (str base-url "/highlights?" query-str))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async fetch-highlight
+  "Fetches a single highlight by its UUID."
+  [highlight-id]
+  (let [uri (Uri/parse (str base-url "/highlights/" highlight-id))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async create-highlight
+  "Creates a new highlight. If enqueue-srs is true, it automatically starts the review lifecycle."
+  [payload]
+  (let [uri (Uri/parse (str base-url "/highlights"))
+        api-payload {"content"      (or (:content payload) (get payload "content"))
+                     "source_type"  (or (:source-type payload) (get payload "source_type"))
+                     "source_ref"   (or (:source-ref payload) (get payload "source_ref"))
+                     "note"         (or (:note payload) (get payload "note"))
+                     "context_data" (or (:context-data payload) (get payload "context_data") {})
+                     "enqueue_srs"  (or (:enqueue-srs payload) (get payload "enqueue_srs") false)}
+        body (convert/jsonEncode api-payload)
+        resp (await (http/post uri .headers (get-auth-headers) .body body))]
+    (parse-response resp)))
+
+(defn ^:async update-highlight
+  "Updates the static textual content of an existing highlight."
+  [highlight-id payload]
+  (let [uri (Uri/parse (str base-url "/highlights/" highlight-id))
+        api-payload {"content"      (or (:content payload) (get payload "content"))
+                     "note"         (or (:note payload) (get payload "note"))
+                     "source_ref"   (or (:source-ref payload) (get payload "source_ref"))
+                     "context_data" (or (:context-data payload) (get payload "context_data") {})}
+        body (convert/jsonEncode api-payload)
+        resp (await (http/put uri .headers (get-auth-headers) .body body))]
+    (parse-response resp)))
+
+(defn ^:async delete-highlight
+  "Deletes a highlight. Cascades to delete associated SRS items and review logs."
+  [highlight-id]
+  (let [uri (Uri/parse (str base-url "/highlights/" highlight-id))
+        resp (await (http/delete uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async fetch-due-reviews
+  "Fetches the queue of SRS items that are due for review today."
+  [& {:keys [limit include-new] :or {limit 50 include-new true}}]
+  (let [uri (Uri/parse (str base-url "/reviews/due?limit=" limit "&include_new=" include-new))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async enqueue-srs
+  "Manually pushes an existing highlight into the Spaced Repetition System."
+  [highlight-id]
+  (let [uri (Uri/parse (str base-url "/highlights/" highlight-id "/srs"))
+        resp (await (http/post uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async submit-review
+  "Submits SM-2 review feedback. Grade must be 1 (Again), 2 (Hard), 3 (Good), or 4 (Easy)."
+  [srs-item-id grade & {:keys [duration-ms]}]
+  (let [uri (Uri/parse (str base-url "/srs_items/" srs-item-id "/reviews"))
+        api-payload (cond-> {"grade" grade}
+                      duration-ms (assoc "duration_ms" duration-ms))
+        body (convert/jsonEncode api-payload)
+        resp (await (http/post uri .headers (get-auth-headers) .body body))]
+    (parse-response resp)))
+
+(defn ^:async update-srs-status
+  "Manually updates the SRS item status (e.g., suspending an item)."
+  [srs-item-id status]
+  (let [uri (Uri/parse (str base-url "/srs_items/" srs-item-id))
+        body (convert/jsonEncode {"status" status})
+        resp (await (http/patch uri .headers (get-auth-headers) .body body))]
+    (parse-response resp)))
+
+(defn ^:async fetch-review-logs
+  "Retrieves the immutable review history for a specific SRS item."
+  [srs-item-id & {:keys [page limit] :or {page 1 limit 50}}]
+  (let [uri (Uri/parse (str base-url "/srs_items/" srs-item-id "/review_logs?page=" page "&limit=" limit))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+;; =============================================================================
+;; 8. User Relationships (Follows)
+;; =============================================================================
+
+(defn ^:async follow-user
+  "Follows another user by their ID."
+  [user-id]
+  (let [uri (Uri/parse (str base-url "/users/" user-id "/follow"))
+        resp (await (http/post uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async unfollow-user
+  "Unfollows a user."
+  [user-id]
+  (let [uri (Uri/parse (str base-url "/users/" user-id "/follow"))
+        resp (await (http/delete uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async fetch-followers
+  "Fetches the list of users following the specified user."
+  [user-id & {:keys [page limit] :or {page 1 limit 20}}]
+  (let [uri (Uri/parse (str base-url "/users/" user-id "/followers?page=" page "&limit=" limit))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async fetch-following
+  "Fetches the list of users that the specified user is currently following."
+  [user-id & {:keys [page limit] :or {page 1 limit 20}}]
+  (let [uri (Uri/parse (str base-url "/users/" user-id "/following?page=" page "&limit=" limit))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async fetch-follow-stats
+  "Retrieves follower and following counts for a user."
+  [user-id]
+  (let [uri (Uri/parse (str base-url "/users/" user-id "/follow-stats"))
+        resp (await (http/get uri .headers (get-auth-headers)))]
+    (parse-response resp)))
+
+(defn ^:async fetch-relationship
+  "Checks the current logged-in user's relationship to the target user (e.g., is_following)."
+  [user-id]
+  (let [uri (Uri/parse (str base-url "/users/" user-id "/relationship"))
         resp (await (http/get uri .headers (get-auth-headers)))]
     (parse-response resp)))

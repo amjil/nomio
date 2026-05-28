@@ -1,0 +1,118 @@
+(ns nomio.widgets.review-banner
+  "A homepage dashboard banner that displays the current count of due SRS reviews.
+   Now styled with Tenger Blue design language and decoupled from router."
+  (:require
+   ["package:flutter/material.dart" :as m]
+   ["package:mongol/mongol.dart" :as mgl]
+   [cljd.flutter :as f]
+   [nomio.core.api :as api]
+   [nomio.utils.tokens :as tokens]))
+
+;; =============================================================================
+;; Widget Implementation
+;; =============================================================================
+
+(defn review-banner
+  "A reactive banner card that renders due review counts in vertical Mongolian script."
+  []
+  (let [!state (atom {:loading? true :due-count 0 :error nil})
+        
+        refresh-count!
+        (fn []
+          (reset! !state {:loading? true :due-count (:due-count @!state) :error nil})
+          (-> (api/fetch-due-reviews :limit 1)
+              (.then (fn [res]
+                       (let [count-val (or (get-in res [:meta :due_count])
+                                           (get-in res ["meta" "due_count"])
+                                           (and (sequential? res) (count res))
+                                           (and (map? res) (sequential? (:data res)) (count (:data res)))
+                                           0)]
+                         (reset! !state {:loading? false :due-count count-val :error nil}))))
+              (.catchError (fn [e]
+                             (reset! !state {:loading? false :due-count 0 :error (str e)})))))]
+    
+    (refresh-count!)
+    
+    (f/widget
+     :context local-ctx
+     :watch [state-map !state]
+     :let [{:keys [loading? due-count error]} state-map
+           
+           on-start-review
+           (fn []
+             (-> (m/Navigator.pushNamed local-ctx "/daily-review")
+                 (.then (fn [_] (refresh-count!)))))]
+     
+     (m/Padding
+      .padding (m/EdgeInsets.symmetric .horizontal 16.0 .vertical 12.0)
+      .child
+      (m/Container
+       .height 160.0
+       .decoration (m/BoxDecoration 
+                    .color tokens/surface-color
+                    .borderRadius (m/BorderRadius.circular 20.0)
+                    .boxShadow tokens/tenger-shadow
+                    .border (m/Border.all .color (.withOpacity tokens/primary-color 0.1) .width 1.0))
+       .child
+       (m/Material
+        .color m.Colors/transparent
+        .child
+        (m/InkWell
+         .borderRadius (m/BorderRadius.circular 20.0)
+         .onTap (if (and (> due-count 0) (not loading?)) on-start-review nil)
+         .child
+         (m/Padding
+          .padding (m/EdgeInsets.all 24.0)
+          .child
+          (m/Row
+           .crossAxisAlignment m.CrossAxisAlignment/start
+           .children
+           [;; 1. Left Side Icon Area (Top-aligned)
+            (m/Container
+             .padding (m/EdgeInsets.all 14.0)
+             .decoration (m/BoxDecoration 
+                          .color (if (> due-count 0) tokens/primary-container tokens/srs-easy-bg)
+                          .shape m.BoxShape/circle)
+             .child (m/Icon (if (> due-count 0) m.Icons/psychology m.Icons/check_circle) 
+                            .color (if (> due-count 0) tokens/primary-color tokens/srs-easy)))
+            
+            (m/SizedBox .width 20.0)
+            
+            ;; 2. Center Text Flow Region
+            (m/Expanded
+             .child
+             (m/Row
+              .crossAxisAlignment m.CrossAxisAlignment/start
+              .children
+              [;; Column 1: Main Title
+               (mgl/MongolText "Өдрийн давтлага" 
+                               .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 18.0 .color tokens/text-primary .fontWeight m.FontWeight/bold))
+               
+               (m/SizedBox .width 16.0)
+               
+               ;; Column 2: Dynamic Status Subtitle
+               (cond
+                 loading? 
+                 (m/Column 
+                  .crossAxisAlignment m.CrossAxisAlignment/center
+                  .children [(m/SizedBox .width 16.0 .height 16.0 .child (m/CircularProgressIndicator .strokeWidth 2.0 .color tokens/primary-color))
+                             (m/SizedBox .height 12.0)
+                             (mgl/MongolText "Уншиж байна..." .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .color tokens/text-secondary))])
+                 
+                 error 
+                 (mgl/MongolText "Холболтын алдаа" .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .color tokens/srs-again))
+                 
+                 (> due-count 0) 
+                 (mgl/MongolText (str "Танд өнөөдөр давтах " due-count " карт байна.") 
+                                 .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .color tokens/text-secondary .height 1.5))
+                 
+                 :else 
+                 (mgl/MongolText "Өнөөдрийн бүх картыг давтсан байна!" 
+                                 .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .color tokens/text-secondary .height 1.5)))]))
+            
+            ;; 3. Right Side: Action Arrow
+            (if (and (> due-count 0) (not loading?))
+              (m/Padding
+               .padding (m/EdgeInsets.only .top 16.0)
+               .child (m/Icon m.Icons/arrow_forward_ios .color tokens/primary-color .size 16.0))
+              (m/SizedBox.shrink))])))))))))

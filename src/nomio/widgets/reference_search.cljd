@@ -1,42 +1,24 @@
 (ns nomio.widgets.reference-search
-  "A dedicated widget for searching and inserting post/block references.
-   Features a perfect dynamic layout that respects the device notch (using parent context) 
-   and isolates IME wrappers for Desktop Z-index stability."
+  "A dedicated widget for searching and inserting post, block, or highlight references.
+   Supports 3 tabs: Posts, Blocks, and Highlights to allow full PKM resurfacing in the editor."
   (:require
    ["package:flutter/material.dart" :as m]
-   ["package:flutter/foundation.dart" :as foundation]
    ["package:mongol/mongol.dart" :as mgl]
    ["dart:core" :as dc]
    [cljd.flutter :as f]
    [clojure.string :as str]
    
-   ;; Nomio business layer
+   ;; Nomio business & network layer
    [nomio.core.api :as api]
    [components.toast :as toast]
+   [nomio.utils.platform :as platform]
 
-   ;; Custom TextField (Ensure this has :key (m/ObjectKey. controller) applied in its own file)
+   ;; Custom TextField & IME components
    [rich-editor.components.text-field :as custom-tf]
-
-   ;; Virtual Keyboard & IME dependencies
    [shared-ime.controller :as ime-ctrl]
    [virtual-keyboard.keyboard :as keyboard]
    [virtual-keyboard.options :as options]
    [shared-ime.overlay-view :as overlay]))
-
-;; =============================================================================
-;; Platform Check Utilities
-;; =============================================================================
-
-(def is-desktop? 
-  (let [p foundation/defaultTargetPlatform]
-    (or (= p foundation.TargetPlatform/macOS)
-        (= p foundation.TargetPlatform/windows)
-        (= p foundation.TargetPlatform/linux))))
-
-(defn is-mobile? []
-  (let [p foundation/defaultTargetPlatform]
-    (or (= p foundation.TargetPlatform/android)
-        (= p foundation.TargetPlatform/iOS))))
 
 ;; =============================================================================
 ;; Isolated State for the Search Modal
@@ -55,27 +37,29 @@
 ;; =============================================================================
 
 (defn- reference-search-view
-  "Top-level view component for the bottom sheet modal.
-   Receives pre-calculated `modal-h` to guarantee it never overlaps the system notch."
+  "Top-level view component for the bottom sheet modal."
   [_sheet-ctx !target-editor-state captured-active-id modal-h]
-  (let [!raw-posts (atom [])
+  (let [!raw-results (atom [])
         !loading? (atom false)
+        ;; 🌟 Toggle between :post, :block, and :highlight
         !search-type (atom :post)
         
-        do-search! (fn [q]
-                     (when-not (str/blank? q)
-                       (reset! !loading? true)
-                       (let [fetch-promise (if (= @!search-type :block)
-                                             (api/search-blocks q :limit 20)
-                                             (api/search-posts q :limit 20))]
-                         (-> fetch-promise
-                             (.then (fn [data]
-                                      (reset! !raw-posts (vec (or data [])))
-                                      (reset! !loading? false)
-                                      nil))
-                             (.catchError (fn [_]
-                                            (reset! !loading? false)
-                                            nil))))))]
+        do-search! 
+        (fn [q]
+          (reset! !loading? true)
+          (let [;; Route to the appropriate network API based on the selected tab
+                fetch-promise (case @!search-type
+                                :post      (api/search-posts q :limit 20)
+                                :block     (api/search-blocks q :limit 20)
+                                :highlight (api/fetch-highlights :limit 20))]
+            (-> fetch-promise
+                (.then (fn [data]
+                         (reset! !raw-results (vec (or data [])))
+                         (reset! !loading? false)
+                         nil))
+                (.catchError (fn [_]
+                               (reset! !loading? false)
+                               nil)))))]
     (f/widget
      :context local-ctx
      
@@ -85,7 +69,7 @@
      :get {{{:flds [surface primary outlineVariant onSurfaceVariant surfaceVariant]} .-colorScheme
             {:flds [titleMedium bodyMedium labelSmall]} .-textTheme} m/Theme}
             
-     :watch [raw-posts !raw-posts
+     :watch [results !raw-results
              loading? !loading?
              search-type !search-type
              ref-search-state !ref-search-state]
@@ -93,7 +77,6 @@
      :let [info (merge options/keyboard-option {:keyboard/mongol-font-family "OyunQaganTig"
                                                 :keyboard/key-container-color m/Colors.grey.shade500
                                                 :keyboard/font-size 16})
-           results raw-posts
            
            main-content
            (m/Container
@@ -101,11 +84,11 @@
             .child
             (m/Row
              .children
-             [;; A. Sidebar Search Controls
+             [;; A. Sidebar Search Category Controls
               (m/Container
-               .width 72.0
+               .width 80.0
                .margin (m/EdgeInsets.only .left 16.0 .top 16.0 .bottom 16.0)
-               .decoration (m/BoxDecoration .color surfaceVariant .borderRadius (m/BorderRadius.circular 36.0))
+               .decoration (m/BoxDecoration .color surfaceVariant .borderRadius (m/BorderRadius.circular 40.0))
                .child
                (m/Column
                 .children
@@ -116,7 +99,6 @@
                   (m/Padding
                    .padding (m/EdgeInsets.only .bottom 16.0)
                    .child
-                   ;; Use custom-tf so IME works correctly
                    (custom-tf/text-field
                     !ref-search-state
                     {:controller search-ctrl
@@ -129,6 +111,7 @@
                                      nil)
                      :style (m/TextStyle .fontFamily "OyunQaganTig" .color onSurfaceVariant)})))
                  
+                 ;; Three tabs switcher (Post / Block / Highlight)
                  (m/Container
                   .padding (m/EdgeInsets.symmetric .vertical 16.0)
                   .decoration (m/BoxDecoration .border (m/Border .top (m/BorderSide .color outlineVariant .width 0.5)))
@@ -137,7 +120,7 @@
                    .mainAxisSize m.MainAxisSize/min
                    .children
                    [(m/InkWell
-                     .onTap (fn [] (reset! !search-type :post) nil)
+                     .onTap (fn [] (reset! !search-type :post) (do-search! (.-text search-ctrl)) nil)
                      .child (m/Padding 
                              .padding (m/EdgeInsets.symmetric .vertical 12.0 .horizontal 4.0)
                              .child (mgl/MongolText "Нийтлэл"
@@ -145,17 +128,26 @@
                                                                       .fontWeight (if (= search-type :post) m.FontWeight/bold m.FontWeight/normal)
                                                                       .color (if (= search-type :post) primary onSurfaceVariant)))))
                     (m/InkWell
-                     .onTap (fn [] (reset! !search-type :block) nil)
+                     .onTap (fn [] (reset! !search-type :block) (do-search! (.-text search-ctrl)) nil)
                      .child (m/Padding 
                              .padding (m/EdgeInsets.symmetric .vertical 12.0 .horizontal 4.0)
                              .child (mgl/MongolText "Хэсэг"
                                                     .style (.copyWith titleMedium .fontFamily "OyunQaganTig"
                                                                       .fontWeight (if (= search-type :block) m.FontWeight/bold m.FontWeight/normal)
-                                                                      .color (if (= search-type :block) primary onSurfaceVariant)))))]))]))
+                                                                      .color (if (= search-type :block) primary onSurfaceVariant)))))
+                    ;; 🌟 NEW: Highlight category tab selection
+                    (m/InkWell
+                     .onTap (fn [] (reset! !search-type :highlight) (do-search! (.-text search-ctrl)) nil)
+                     .child (m/Padding 
+                             .padding (m/EdgeInsets.symmetric .vertical 12.0 .horizontal 4.0)
+                             .child (mgl/MongolText "Эшлэл"
+                                                    .style (.copyWith titleMedium .fontFamily "OyunQaganTig"
+                                                                      .fontWeight (if (= search-type :highlight) m.FontWeight/bold m.FontWeight/normal)
+                                                                      .color (if (= search-type :highlight) primary onSurfaceVariant)))))]))]))
               
               (m/SizedBox .width 24.0)
               
-              ;; B. Horizontal Results View
+              ;; B. Horizontal Results Scroll View
               (m/Expanded
                .child
                (if loading?
@@ -169,11 +161,22 @@
                     .itemBuilder
                     (fn [_ i]
                       (let [item (nth results i)
-                            is-post? (= search-type :post)
-                            display-title (if is-post? (get item "title" "Гарчиггүй") (get item "text" "Хоосон"))
-                            display-subtitle (if is-post? 
-                                               (str "@" (get item "author_username" "user"))
-                                               (str "Эх сурвалж: " (get item "post_title" "")))]
+                            
+                            ;; Dynamic parsing fields maps based on payload architecture
+                            display-title (case search-type
+                                            :post      (get item "title" "Гарчиггүй")
+                                            :block     (get item "text" "Хоосон")
+                                            :highlight (get item "content" "Эшлэл хоосон"))
+                                            
+                            display-subtitle (case search-type
+                                               :post      (str "@" (get item "author_username" "user"))
+                                               :block     (str "Эх сурвалж: " (get item "post_title" ""))
+                                               :highlight (str "Тэмдэглэл: " (get item "note" "Байхгүй")))
+                                               
+                            icon-data (case search-type
+                                        :post      m.Icons/link
+                                        :block     m.Icons/format_quote
+                                        :highlight m.Icons/psychology)]
                         
                         (m/Padding
                          .padding (m/EdgeInsets.only .right 16.0)
@@ -184,12 +187,15 @@
                                          new-id (str "ref-" now-ms)
                                          new-p-id (str "block-" (inc now-ms))
                                          
-                                         new-block (if is-post?
-                                                     {:id new-id :type :post-quote :data {:ref-post-id (get item "id")} :content display-title :content-spans [] :children []}
-                                                     {:id new-id :type :block-ref :data {:ref-post-id (get item "post_id") :ref-block-id (get item "block_id")} :content display-title :content-spans [] :children []})
+                                         ;; Construct custom reference payload structures for structural integration
+                                         new-block (case search-type
+                                                     :post      {:id new-id :type :post-quote :data {:ref-post-id (get item "id")} :content display-title :content-spans [] :children []}
+                                                     :block     {:id new-id :type :block-ref :data {:ref-post-id (get item "post_id") :ref-block-id (get item "block_id")} :content display-title :content-spans [] :children []}
+                                                     :highlight {:id new-id :type :paragraph :data {:ref-highlight-id (get item "id")} :content (str "“" display-title "”") :content-spans [] :children []})
                                          
                                          empty-p {:id new-p-id :type :paragraph :content "" :content-spans [] :children []}]
                                      
+                                     ;; Atomic mutation on parent editor layout tree
                                      (swap! !target-editor-state
                                             (fn [state]
                                               (let [root (:root state)
@@ -213,21 +219,21 @@
                            .width 160.0
                            .padding (m/EdgeInsets.all 16.0)
                            .decoration (m/BoxDecoration 
-                                        .color (if is-post? m.Colors/transparent (.withOpacity surfaceVariant 0.5))
+                                        .color (if (= search-type :post) m.Colors/transparent (.withOpacity surfaceVariant 0.5))
                                         .border (m/Border.all .color outlineVariant)
                                         .borderRadius (m/BorderRadius.circular 12.0))
                            .child
                            (m/Column
                             .crossAxisAlignment m.CrossAxisAlignment/start
                             .children
-                            [(m/Icon (if is-post? m.Icons/link m.Icons/format_quote) .color primary .size 20.0)
+                            [(m/Icon icon-data .color primary .size 20.0)
                              (m/SizedBox .width 16.0)
                              (m/Expanded
                               .child
                               (mgl/MongolText display-title 
-                                              .style (.copyWith (if is-post? titleMedium bodyMedium) 
+                                              .style (.copyWith (if (= search-type :post) titleMedium bodyMedium) 
                                                                 .fontFamily "OyunQaganTig" 
-                                                                .fontWeight (if is-post? m.FontWeight/bold m.FontWeight/normal))
+                                                                .fontWeight (if (= search-type :post) m.FontWeight/bold m.FontWeight/normal))
                                               .maxLines 5 
                                               .overflow m.TextOverflow/ellipsis))
                              (m/SizedBox .width 16.0)
@@ -236,7 +242,6 @@
      
      :bind {:info info}
      
-     ;; 🌟 完美高度控制：使用传入的已扣除刘海高度的 modal-h 
      (m/Container
       .height modal-h
       .child
@@ -247,7 +252,7 @@
         .backgroundColor surface
         .resizeToAvoidBottomInset false
         .body
-        (if (is-mobile?)
+        (if (platform/use-virtual-keyboard?)
           (m/Column
            .children
            [(m/Expanded
@@ -257,7 +262,6 @@
               [main-content
                (keyboard/candidates {:widget-key (m/ValueKey. "ref-modal-cand")})]))
             
-            ;; 🌟 底部安全区：仅避开底部的导航条/小黑条，不增加多余空隙
             (m/SafeArea
              .top false
              .child
@@ -282,19 +286,17 @@
 (defn show-dialog!
   "Public API to launch the reference search modal."
   [ctx !target-editor-state]
-  
   (let [captured-active-id (:active-block-id @!target-editor-state)
-        ;; 🌟 核心修复：在真实的根级路由中获取屏幕参数，这时的 top-padding 才包含真实的刘海高度！
         media-q (m/MediaQuery.of ctx)
         screen-h (.-height (.-size media-q))
         top-padding (.-top (.-padding media-q))
-        
-        ;; 给刘海下方留出 12.0 的美观间距。如果是桌面端没有刘海，则默认留出 48.0 的顶部边距。
-        safe-top (if (> top-padding 0) (+ top-padding 12.0) 48.0)
+        safe-top (if (> top-padding 0) (+ top-padding 12.0) (if platform/is-web? 24.0 48.0))
         modal-h (- screen-h safe-top)]
     
-    ;; Put background editor to sleep to avoid focus stealing
     (swap! !target-editor-state assoc :active-block-id nil :cursor-visible false)
+    
+    (let [primary-focus (.-primaryFocus m/FocusManager.instance)]
+      (when primary-focus (.unfocus primary-focus)))
     
     (reset! !ref-search-state 
             {:root ["search-block"]
@@ -309,10 +311,8 @@
          .isScrollControlled true
          .backgroundColor m.Colors/transparent
          .builder (fn [sheet-ctx]
-                    ;; 🌟 将计算好的绝对高度传递给弹窗
                     (reference-search-view sheet-ctx !target-editor-state captured-active-id modal-h)))
         
-        ;; Wake background editor up when modal closes
         (.whenComplete
          (fn []
            (when (nil? (:active-block-id @!target-editor-state))

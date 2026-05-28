@@ -1,0 +1,72 @@
+(ns nomio.utils.tokens
+  "Global design tokens and theme configuration for the Tenger Blue design system.
+   Defines core colors, typography, and standard widget styles."
+  (:require ["package:flutter/material.dart" :as m]))
+
+;; =============================================================================
+;; Color Palette (Tenger Blue)
+;; =============================================================================
+
+(def bg-color (m/Color 0xFFF4F9FF))       ; Airy light blue-gray background
+(def surface-color (m/Color 0xFFFFFFFF))  ; Pure white for cards
+(def primary-color (m/Color 0xFF4FA5E6))  ; Tenger Blue
+(def primary-container (m/Color 0xFFE3F2FD)) ; Soft blue background
+(def text-primary (m/Color 0xFF1A2B3C))   ; Deep ink blue for high readability
+(def text-secondary (m/Color 0xFF64748B)) ; Slate blue-gray for metadata
+
+;; SRS Semantic Colors
+(def srs-again (m/Color 0xFFFF7676))
+(def srs-again-bg (m/Color 0xFFFFEDED))
+(def srs-hard (m/Color 0xFFFFA726))
+(def srs-hard-bg (m/Color 0xFFFFF3E0))
+(def srs-good primary-color)
+(def srs-good-bg primary-container)
+(def srs-easy (m/Color 0xFF66BB6A))
+(def srs-easy-bg (m/Color 0xFFE8F5E9))
+
+;; =============================================================================
+;; Shadows & Shapes
+;; =============================================================================
+
+(def tenger-shadow
+  "A soft, primary-tinted shadow to make cards float."
+  [(m/BoxShadow
+    .color (.withOpacity primary-color 0.08)
+    .blurRadius 20.0
+    .offset (m/Offset 0.0 8.0))])
+
+(def card-shape
+  "Standard 16px rounded corners with a subtle primary-tinted border."
+  (m/RoundedRectangleBorder
+   .borderRadius (m/BorderRadius.circular 16.0)
+   .side (m/BorderSide .color (.withOpacity primary-color 0.1) .width 1.0)))
+
+;; =============================================================================
+;; Global Theme
+;; =============================================================================
+
+(def tenger-theme
+  (m/ThemeData
+   .scaffoldBackgroundColor bg-color
+   .primaryColor primary-color
+   .colorScheme (m/ColorScheme.light
+                 .primary primary-color
+                 .primaryContainer primary-container
+                 .surface surface-color
+                 .onSurface text-primary
+                 .onSurfaceVariant text-secondary
+                 .error srs-again
+                 .background bg-color)
+   .cardTheme (m/CardTheme
+               .color surface-color
+               .elevation 0.0
+               .shape card-shape)
+   .appBarTheme (m/AppBarTheme
+                 .backgroundColor m.Colors/transparent
+                 .elevation 0.0
+                 .centerTitle false
+                 .iconTheme (m/IconThemeData .color primary-color)
+                 .titleTextStyle (m/TextStyle .color text-primary 
+                                              .fontFamily "OyunQaganTig" 
+                                              .fontSize 20.0 
+                                              .fontWeight m.FontWeight/bold))))

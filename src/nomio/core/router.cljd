@@ -9,7 +9,10 @@
    [nomio.screens.auth :as auth]
    [nomio.screens.topic :as topic]
    [nomio.screens.explore :as explore]
-   [nomio.screens.post-comments :as post-comments]))
+   [nomio.screens.post-comments :as post-comments]
+   ;; SRS & PKM Screens
+   [nomio.screens.daily-review :as daily-review]
+   [nomio.screens.highlight-manager :as hl-manager]))
 
 ;; =============================================================================
 ;; Named Route Constants
@@ -24,6 +27,9 @@
 (def route-topic "/topic")
 (def route-explore "/explore")
 (def route-comments "/comments")
+;; PKM Routes
+(def route-daily-review "/daily-review")
+(def route-highlight-manager "/highlights")
 
 ;; =============================================================================
 ;; Core: Route Generator
@@ -83,8 +89,16 @@
            (if post-id
              (post-comments/post-comments-screen post-id)
              (m/Scaffold .body (m/Center .child (m/Text "Error: Post ID not found")))))
+             
+         ;; 8. Daily Review (Spaced Repetition System)
+         "/daily-review"
+         (daily-review/screen)
+         
+         ;; 9. Highlight Manager (Assets overview)
+         "/highlights"
+         (hl-manager/screen)
 
-         ;; 8. 404 Fallback page (Undefined routes)
+         ;; 10. 404 Fallback page (Undefined routes)
          (m/Scaffold
           .appBar (m/AppBar .title (m/Text "404"))
           .body (m/Center .child (m/Text (str "Page not found: " route-name))))))))) 
@@ -123,3 +137,10 @@
                          .arguments {:edit-id post-id 
                                      :edit-title title 
                                      :edit-blocks blocks}))
+
+;; Helpers for PKM / Spaced Repetition features
+(defn push-to-daily-review [ctx]
+  (m/Navigator.pushNamed ctx route-daily-review))
+
+(defn push-to-highlights [ctx]
+  (m/Navigator.pushNamed ctx route-highlight-manager))

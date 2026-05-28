@@ -1,5 +1,6 @@
 (ns nomio.widgets.block-renderer
-  "Read-only rich text block renderer: Parses backend JSON blocks into Flutter native Widgets, supporting inline style restoration."
+  "Read-only rich text block renderer: Parses backend JSON blocks into Flutter native Widgets.
+   Integrated with custom MglSelectableText and Overlay for native vertical Universal Capture."
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:mongol/mongol.dart" :as mgl]
@@ -7,7 +8,9 @@
    ["dart:convert" :as convert]
    [cljd.flutter :as f]
    [components.tokens :as tokens]
-   [components.toast :as toast]))
+   [components.toast :as toast]
+   ["package:mgl_editor_core/mgl_selectable_text.dart" :as mgl-sel]
+   [nomio.widgets.capture-modal :as capture]))
 
 ;; =============================================================================
 ;; 1. Inline Spans Slicer
@@ -44,12 +47,111 @@
                        (conj acc (m/TextSpan .text (subs text start end) .style styled-font)))))))))))
 
 ;; =============================================================================
-;; 2. Core: Block Renderer
+;; 2. Selectable Text Wrapper using Overlay & Custom MglSelectableText
+;; =============================================================================
+
+(defn- render-selectable-text 
+  "Uses custom MglSelectableText for vertical text selection and injects a 
+   custom OverlayEntry to display a perfectly positioned action menu."
+  [ctx text-content spans base-font post-id]
+  (let [spans-array (build-text-spans text-content spans base-font)
+        
+        on-highlight-fn 
+        (fn [selected-text]
+          (capture/show-capture-dialog! ctx selected-text (str post-id) "post_block"))
+        
+        !selection (atom nil)
+        !overlay-entry (atom nil)]
+    
+    (f/widget
+     :context local-ctx
+     :let [text-key (m/GlobalKey.)
+           
+           hide-menu! 
+           (fn []
+             (when-let [entry @!overlay-entry]
+               (.remove entry)
+               (reset! !overlay-entry nil))
+             ;; 🌟 FIXED: Explicitly return nil to satisfy Dart's strict type checking
+             nil)
+               
+           show-menu! 
+           (fn [sel]
+             (hide-menu!)
+             (when (and sel (not (.-isCollapsed sel)))
+               (let [start-offset (.-baseOffset sel)
+                     global-pos (mgl-sel.MglSelectableText/getGlobalOffsetForCaret text-key start-offset)
+                     selected-text (if (.-isValid sel) (.textInside sel text-content) "")
+                     
+                     target-dx (if global-pos (+ (.-dx global-pos) 40.0) 100.0)
+                     target-dy (if global-pos (.-dy global-pos) 100.0)
+                     
+                     entry (m/OverlayEntry
+                            .builder
+                            (fn [b-ctx]
+                              (m/Positioned
+                               .left target-dx
+                               .top target-dy
+                               .child
+                               (m/Material
+                                .elevation 6.0
+                                .color m.Colors/black
+                                .borderRadius (m/BorderRadius.circular 8.0)
+                                .child
+                                (m/InkWell
+                                 .onTap (fn []
+                                          (hide-menu!)
+                                          (reset! !selection nil) 
+                                          (when-not (empty? selected-text)
+                                            (on-highlight-fn selected-text)))
+                                 .borderRadius (m/BorderRadius.circular 8.0)
+                                 .child
+                                 (m/Padding
+                                  .padding (m/EdgeInsets.symmetric .horizontal 16.0 .vertical 12.0)
+                                  .child
+                                  (m/Row
+                                   .mainAxisSize m.MainAxisSize/min
+                                   .children
+                                   [(m/Icon m.Icons/edit_note .color m.Colors/white .size 18.0)
+                                    (m/SizedBox .width 8.0)
+                                    (mgl/MongolText "Эшлэх"
+                                                    .style (m/TextStyle .fontFamily "OyunQaganTig" 
+                                                                        .color m.Colors/white 
+                                                                        .fontSize 14.0 
+                                                                        .fontWeight m.FontWeight/bold))])))))))]
+                 
+                 (reset! !overlay-entry entry)
+                 (.insert (m/Overlay.of local-ctx) entry)))
+             ;; 🌟 FIXED: Explicitly return nil
+             nil)]
+     
+     :watch [current-sel !selection]
+     
+     (m/Listener
+      .onPointerDown (fn [_] (hide-menu!))
+      .child
+      (mgl-sel/MglSelectableText
+       .textKey text-key
+       .textSpan (m/TextSpan .children spans-array)
+       .selection current-sel
+       .showStartHandle true
+       .showEndHandle true
+       .onSelectionChanged (fn [new-sel]
+                             (reset! !selection new-sel)
+                             (if (and new-sel (not (.-isCollapsed new-sel)))
+                               (show-menu! new-sel)
+                               (hide-menu!))
+                             ;; 🌟 FIXED: Explicitly return nil
+                             nil))))))
+
+;; =============================================================================
+;; 3. Core: Block Renderer
 ;; =============================================================================
 
 (defn render-block 
-  "Renders the corresponding read-only Mongolian component based on the backend block dictionary."
-  [block]
+  "Renders the corresponding read-only Mongolian component based on the backend block dictionary.
+   Accepts post-id to tag captured highlights with their origin."
+  [block post-id] 
   (f/widget
    :get {{{:flds [primary onSurface onSurfaceVariant surfaceVariant outlineVariant]} .-colorScheme
           {:flds [bodyMedium labelSmall]} .-textTheme} m/Theme}
@@ -62,14 +164,12 @@
          spans (or (get block "spans") (get block "content-spans") [])
          image-url (or (get block "url") (get-in block ["data" "url"]) "")
          
-         ;; Ultimate parser: handle backend sending data as a JSON string
          raw-data-val (or (get block "data") (get block :data))
          raw-data (cond
                     (string? raw-data-val) (try (convert/jsonDecode raw-data-val) (catch dc/Exception _ {}))
                     raw-data-val raw-data-val
                     :else {})
                     
-         ;; Try all key variants (snake_case, kebab-case, backend aliases) for ref-post-id
          ref-post-id (or (get raw-data "ref-post-id")
                          (get raw-data "ref_post_id")
                          (get raw-data :ref-post-id)
@@ -84,9 +184,6 @@
       .padding (m/EdgeInsets.only .right (tokens/space :l))
       .child
       (case b-type
-        ;; ------------------------------------------
-        ;; Post Quote
-        ;; ------------------------------------------
         "post-quote"
         (m/GestureDetector
          .behavior m.HitTestBehavior/opaque
@@ -94,7 +191,6 @@
                   (if ref-post-id
                     (m/Navigator.pushNamed ctx "/post" .arguments {:id ref-post-id})
                     (do 
-                      ;; Debug: if ID is missing, log the full block payload to the console
                       (dc/print (str "🚨 [DEBUG ALARM] Missing ID! Block data is: " block))
                       (toast/error ctx "Уучлаарай, холбоосны ID олдсонгүй")))
                   nil)
@@ -118,9 +214,6 @@
                              .maxLines 5
                              .overflow m.TextOverflow/ellipsis))])))
 
-        ;; ------------------------------------------
-        ;; Block Reference
-        ;; ------------------------------------------
         "block-ref"
         (m/GestureDetector
          .behavior m.HitTestBehavior/opaque
@@ -151,9 +244,6 @@
                              .maxLines 5
                              .overflow m.TextOverflow/ellipsis))])))
 
-        ;; ------------------------------------------
-        ;; Backlink (dynamically injected)
-        ;; ------------------------------------------
         "backlink"
         (m/GestureDetector
          .behavior m.HitTestBehavior/opaque
@@ -190,9 +280,6 @@
                              .maxLines 5
                              .overflow m.TextOverflow/ellipsis))])))
 
-        ;; ------------------------------------------
-        ;; Image Block
-        ;; ------------------------------------------
         "image"
         (m/ClipRRect
          .borderRadius (m/BorderRadius.circular (tokens/radius :s))
@@ -207,46 +294,24 @@
                                                       .color outlineVariant
                                                       .child (m/Center .child (m/CircularProgressIndicator)))))))
 
-        ;; ------------------------------------------
-        ;; Heading 1 (H1)
-        ;; ------------------------------------------
         "heading-1"
-        (mgl/MongolText.rich
-         (m/TextSpan
-          .children (build-text-spans text-content spans 
-                                      (.copyWith base-font 
-                                                 .fontSize 28.0 
-                                                 .fontWeight m.FontWeight/w900))))
+        (render-selectable-text ctx text-content spans 
+                                (.copyWith base-font .fontSize 28.0 .fontWeight m.FontWeight/w900) 
+                                post-id)
 
-        ;; ------------------------------------------
-        ;; Heading 2 (H2)
-        ;; ------------------------------------------
         "heading-2"
-        (mgl/MongolText.rich
-         (m/TextSpan
-          .children (build-text-spans text-content spans 
-                                      (.copyWith base-font 
-                                                 .fontSize 22.0 
-                                                 .fontWeight m.FontWeight/bold))))
+        (render-selectable-text ctx text-content spans 
+                                (.copyWith base-font .fontSize 22.0 .fontWeight m.FontWeight/bold) 
+                                post-id)
 
-        ;; ------------------------------------------
-        ;; Blockquote
-        ;; ------------------------------------------
         "blockquote"
         (m/Container
          .padding (m/EdgeInsets.only .top (tokens/space :m))
          .decoration (m/BoxDecoration .border (m/Border .top (m/BorderSide .color outlineVariant .width 4.0)))
-         .child (mgl/MongolText.rich
-                 (m/TextSpan
-                  .children (build-text-spans text-content spans 
-                                              (.copyWith base-font 
-                                                         .fontSize 16.0 
-                                                         .fontStyle m.FontStyle/italic 
-                                                         .color onSurfaceVariant)))))
+         .child (render-selectable-text ctx text-content spans 
+                                        (.copyWith base-font .fontSize 16.0 .fontStyle m.FontStyle/italic .color onSurfaceVariant) 
+                                        post-id))
 
-        ;; ------------------------------------------
-        ;; List Item
-        ;; ------------------------------------------
         "list-item"
         (m/Column
          .crossAxisAlignment m.CrossAxisAlignment/start
@@ -254,17 +319,11 @@
          [(m/Padding
            .padding (m/EdgeInsets.only .top 4.0 .right 8.0)
            .child (m/Text "• " .style (m/TextStyle .fontSize 18.0 .color onSurface)))
-          (mgl/MongolText.rich
-           (m/TextSpan
-            .children (build-text-spans text-content spans 
-                                        (.copyWith base-font .fontSize 16.0 .height 1.6))))])
+          (render-selectable-text ctx text-content spans 
+                                  (.copyWith base-font .fontSize 16.0 .height 1.6) 
+                                  post-id)])
 
-        ;; ------------------------------------------
-        ;; Default Paragraph (Fallback)
-        ;; ------------------------------------------
-        (mgl/MongolText.rich
-         (m/TextSpan
-          .children (build-text-spans text-content spans 
-                                      (.copyWith base-font 
-                                                 .fontSize 16.0 
-                                                 .height 1.6))))))))
+        ;; Default Paragraph
+        (render-selectable-text ctx text-content spans 
+                                (.copyWith base-font .fontSize 16.0 .height 1.6) 
+                                post-id)))))

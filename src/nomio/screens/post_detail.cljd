@@ -80,7 +80,7 @@
              backlinks !backlinks
              loading-backlinks? !loading-backlinks?]
 
-     :let [;; 🌟 CORE LOGIC: Merge the actual post blocks with the injected backlink blocks
+     :let [;; CORE LOGIC: Merge the actual post blocks with the injected backlink blocks
            core-blocks (or (get post "blocks") [])
            backlink-blocks (mapv backlink->block backlinks)
            combined-blocks (concat core-blocks backlink-blocks)]
@@ -138,7 +138,7 @@
                           (-> (m/Navigator.pushNamed ctx "/create"
                                                      .arguments {:edit-id (get post "id")
                                                                  :edit-title (get post "title")
-                                                                 ;; 🌟 CRITICAL: Only send core blocks to the editor to prevent saving backlinks as actual content
+                                                                 ;; CRITICAL: Only send core blocks to the editor to prevent saving backlinks as actual content
                                                                  :edit-blocks core-blocks})
                               (.then (fn [_]
                                        ;; Reload both post and backlinks after editing
@@ -177,7 +177,8 @@
              ;; 2 & 5. Unified Content Rendering (Core Text + Injected Backlinks)
              (m/Row
               .crossAxisAlignment m.CrossAxisAlignment/start
-              .children (into [] (keep block-renderer/render-block combined-blocks)))
+              ;; 🌟 核心修复与接入点：使用匿名函数将 block 和 post-id 一起喂给渲染器
+              .children (into [] (keep #(block-renderer/render-block % post-id) combined-blocks)))
 
              (m/SizedBox .width 32.0)
 

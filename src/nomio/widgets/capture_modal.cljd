@@ -1,0 +1,113 @@
+(ns nomio.widgets.capture-modal
+  "A bottom sheet modal for editing captured highlights and adding notes."
+  (:require
+   ["package:flutter/material.dart" :as m]
+   ["package:mongol/mongol.dart" :as mgl]
+   [cljd.flutter :as f]
+   [nomio.core.api :as api]
+   [components.toast :as toast]))
+
+(defn show-capture-dialog!
+  "Launches the capture editing modal.
+   initial-content is the text the user just highlighted.
+   source-ref defines where it came from (e.g., post ID)."
+  [ctx initial-content source-ref source-type]
+  (m/showModalBottomSheet
+   .context ctx
+   .isScrollControlled true
+   .backgroundColor m.Colors/transparent
+   .builder
+   (fn [sheet-ctx]
+     ;; 🌟 核心修复：把 Atom 状态定义在 f/widget 的闭包外层
+     (let [!loading? (atom false)]
+       (f/widget
+        :context local-ctx
+        :managed [content-ctrl (m/TextEditingController. .text initial-content)
+                  note-ctrl (m/TextEditingController.)]
+        
+        :watch [loading? !loading?]
+        
+        :let [save-highlight!
+              (fn []
+                (reset! !loading? true)
+                (-> (api/create-highlight 
+                     {:content (.-text content-ctrl)
+                      :note (.-text note-ctrl)
+                      :source-type source-type
+                      :source-ref source-ref
+                      :enqueue-srs true}) 
+                    (.then (fn [res]
+                             (if (:ok res)
+                               (do
+                                 (toast/success local-ctx "Амжилттай хадгаллаа" :fade)
+                                 (m/Navigator.pop local-ctx))
+                               (toast/error local-ctx "Хадгалахад алдаа гарлаа" :fade))))
+                    (.whenComplete #(reset! !loading? false))))]
+
+        (m/Container
+         .decoration (m/BoxDecoration 
+                      .color m.Colors/white
+                      .borderRadius (m/BorderRadius.vertical .top (m/Radius.circular 20.0)))
+         .padding (m/EdgeInsets.only 
+                   .top 24.0 .left 24.0 .right 24.0
+                   .bottom (+ 24.0 (.-bottom (m/MediaQuery.viewInsetsOf local-ctx))))
+         .child
+         (m/Column
+          .mainAxisSize m.MainAxisSize/min
+          .crossAxisAlignment m.CrossAxisAlignment/start
+          .children
+          [;; Header
+           (m/Row
+            .mainAxisAlignment m.MainAxisAlignment/spaceBetween
+            .children
+            [(mgl/MongolText "Эшлэл хадгалах" .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 18.0 .fontWeight m.FontWeight/bold))
+             (if loading?
+               (m/SizedBox .width 24.0 .height 24.0 .child (m/CircularProgressIndicator .strokeWidth 2.0))
+               (m/IconButton .icon (m/Icon m.Icons/close) .onPressed #(m/Navigator.pop local-ctx)))])
+           
+           (m/SizedBox .height 24.0)
+
+           ;; 1. The Content Area (Editable Quote)
+           (mgl/MongolText "Эшлэлийн эх бичвэр" .style (m/TextStyle .color m.Colors/grey .fontSize 12.0 .fontFamily "OyunQaganTig"))
+           (m/SizedBox .height 8.0)
+           (m/Container
+            .decoration (m/BoxDecoration .color (m/Color 0xFFF5F5F7) .borderRadius (m/BorderRadius.circular 12.0))
+            .padding (m/EdgeInsets.symmetric .horizontal 16.0 .vertical 4.0)
+            .child
+            (mgl/MongolTextField
+             .controller content-ctrl
+             .maxLines 5
+             .minLines 2
+             .decoration (m/InputDecoration .border m/InputBorder.none)
+             .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0)))
+           
+           (m/SizedBox .height 24.0)
+
+           ;; 2. The Note Area (User's Thoughts)
+           (mgl/MongolText "Миний тэмдэглэл" .style (m/TextStyle .color m.Colors/grey .fontSize 12.0 .fontFamily "OyunQaganTig"))
+           (m/SizedBox .height 8.0)
+           (m/Container
+            .decoration (m/BoxDecoration .border (m/Border.all .color (m/Color 0xFFE0E0E0)) .borderRadius (m/BorderRadius.circular 12.0))
+            .padding (m/EdgeInsets.symmetric .horizontal 16.0 .vertical 4.0)
+            .child
+            (mgl/MongolTextField
+             .controller note-ctrl
+             .maxLines 3
+             .minLines 3
+             .decoration (m/InputDecoration .border m/InputBorder.none .hintText "Таны бодол...")
+             .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0)))
+
+           (m/SizedBox .height 32.0)
+
+           ;; 3. Action Button
+           (m/SizedBox
+            .width double/infinity
+            .child
+            (m/ElevatedButton
+             .style (m/ElevatedButton.styleFrom 
+                     .backgroundColor m.Colors/black 
+                     .foregroundColor m.Colors/white
+                     .padding (m/EdgeInsets.symmetric .vertical 16.0)
+                     .shape (m/RoundedRectangleBorder .borderRadius (m/BorderRadius.circular 12.0)))
+             .onPressed (if loading? nil save-highlight!)
+             .child (mgl/MongolText "Хадгалах" .style (m/TextStyle .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold))))])))))))

@@ -1,0 +1,191 @@
+(ns nomio.screens.highlight-manager
+  "A dedicated screen for managing captured highlights, notes, and SRS statuses."
+  (:require
+   ["package:flutter/material.dart" :as m]
+   ["package:mongol/mongol.dart" :as mgl]
+   ["dart:core" :as dc]
+   [cljd.flutter :as f]
+   [nomio.core.api :as api]
+   [components.toast :as toast]
+   [nomio.widgets.capture-modal :as capture]))
+
+;; =============================================================================
+;; UI Components
+;; =============================================================================
+
+(defn- highlight-card
+  "Renders a single highlight item with swipe-to-delete and status toggles.
+   Accepts ctx from the parent widget to trigger toasts and modals."
+  [ctx item refresh-fn!]
+  (let [hl-id (get item :id)
+        srs-item (get item :srs_item)
+        srs-id (get srs-item :id)
+        status (get srs-item :status "new")
+        suspended? (= status "suspended")
+        has-note? (not (empty? (get item :note)))
+        
+        toggle-status!
+        (fn []
+          (if srs-id
+            (-> (api/update-srs-status srs-id (not suspended?))
+                (.then (fn [res]
+                         (if (:ok res)
+                           (do (toast/success ctx "Төлөв өөрчлөгдлөө" :fade)
+                               (refresh-fn!))
+                           (toast/error ctx "Алдаа гарлаа" :fade)))))
+            (toast/error ctx "SRS карт олдсонгүй" :fade)))
+            
+        delete-item!
+        (fn []
+          (-> (api/delete-highlight hl-id)
+              (.then (fn [success?]
+                       (if success?
+                         (do (toast/success ctx "Устгагдлаа" :fade)
+                             (refresh-fn!))
+                         (toast/error ctx "Устгахад алдаа гарлаа" :fade))))))]
+    
+    (m/Dismissible
+     .key (m/Key. hl-id)
+     .direction m.DismissDirection/endToStart
+     .background (m/Container
+                  .color m.Colors/red
+                  .alignment m.Alignment/centerRight
+                  .padding (m/EdgeInsets.only .right 20.0)
+                  .child (m/Icon m.Icons/delete .color m.Colors/white))
+     .confirmDismiss (fn [_] (dc/Future.value true))
+     .onDismissed (fn [_] (delete-item!))
+     .child
+     (m/Card
+      .margin (m/EdgeInsets.symmetric .horizontal 16.0 .vertical 8.0)
+      .elevation 0.0
+      .shape (m/RoundedRectangleBorder 
+              .borderRadius (m/BorderRadius.circular 12.0)
+              .side (m/BorderSide .color (.withOpacity m.Colors/grey 0.2)))
+      .child
+      (m/InkWell
+       .borderRadius (m/BorderRadius.circular 12.0)
+       .onTap (fn []
+                (capture/show-capture-dialog! 
+                 ctx
+                 (get item :content) 
+                 (get item :source_ref) 
+                 (get item :source_type)))
+       .child
+       (m/Padding
+        .padding (m/EdgeInsets.all 16.0)
+        .child
+        (m/Column
+         .crossAxisAlignment m.CrossAxisAlignment/start
+         .children
+         [;; Status & Source Header
+          (m/Row
+           .mainAxisAlignment m.MainAxisAlignment/spaceBetween
+           .children
+           [(m/Row
+             .children
+             [(m/Icon (if suspended? m.Icons/pause_circle_filled m.Icons/play_circle_fill) 
+                      .color (if suspended? m.Colors/grey m.Colors/green) 
+                      .size 16.0)
+              (m/SizedBox .width 8.0)
+              (mgl/MongolText (if suspended? "Түр зогссон" "Идэвхтэй") 
+                              .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 12.0 .color m.Colors/grey))])
+            (mgl/MongolText (get item :source_type "Одоогоор тодорхойгүй") 
+                            .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 12.0 .color m.Colors/blue))])
+          
+          (m/SizedBox .height 12.0)
+          
+          ;; Highlight Content
+          (mgl/MongolText (get item :content "Хоосон")
+                          .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0 .height 1.4))
+          
+          ;; Note Area
+          (when has-note?
+            (m/Container
+             .margin (m/EdgeInsets.only .top 12.0)
+             .padding (m/EdgeInsets.all 12.0)
+             .decoration (m/BoxDecoration .color (.withOpacity m.Colors/orange 0.1) .borderRadius (m/BorderRadius.circular 8.0))
+             .child (m/Row
+                     .crossAxisAlignment m.CrossAxisAlignment/start
+                     .children
+                     [(m/Icon m.Icons/lightbulb_outline .color m.Colors/orange .size 16.0)
+                      (m/SizedBox .width 8.0)
+                      (m/Expanded
+                       .child (mgl/MongolText (get item :note "")
+                                              .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .color (.shade800 m.Colors/orange))))])))
+          
+          (m/SizedBox .height 16.0)
+          
+          ;; Action Buttons
+          (m/Row
+           .mainAxisAlignment m.MainAxisAlignment/end
+           .children
+           [(m/TextButton.icon
+             .icon (m/Icon (if suspended? m.Icons/play_arrow m.Icons/pause) .size 16.0)
+             .label (mgl/MongolText (if suspended? "Сэргээх" "Зогсоох") .style (m/TextStyle .fontFamily "OyunQaganTig"))
+             .onPressed toggle-status!)])])))))))
+
+;; =============================================================================
+;; Main Screen Widget
+;; =============================================================================
+
+(defn screen 
+  "The main highlight manager screen."
+  []
+  (let [!state (atom {:loading? true :items [] :error nil})
+        
+        fetch-data!
+        (fn []
+          (reset! !state {:loading? true :items (:items @!state) :error nil})
+          ;; 🌟 FIXED: Changed .limit to :limit
+          (-> (api/fetch-highlights :limit 100)
+              (.then (fn [items]
+                       (reset! !state {:loading? false :items (vec items) :error nil})))
+              (.catchError (fn [e]
+                             (reset! !state {:loading? false :items [] :error (str e)})))))]
+    
+    (fetch-data!)
+
+    (f/widget
+     :context local-ctx
+     :watch [state-map !state]
+     :let [{:keys [loading? items error]} state-map]
+     
+     (m/Scaffold
+      .backgroundColor (m/Color 0xFFF5F5F7)
+      .appBar (m/AppBar
+               .elevation 0.0
+               .backgroundColor m.Colors/white
+               .foregroundColor m.Colors/black
+               .title (mgl/MongolText "Миний эшлэлүүд" 
+                                      .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 18.0 .fontWeight m.FontWeight/bold))
+               .actions [(m/IconButton 
+                          .icon (m/Icon m.Icons/refresh) 
+                          .onPressed fetch-data!)])
+      .body
+      (cond
+        loading?
+        (m/Center .child (m/CircularProgressIndicator))
+        
+        error
+        (m/Center .child (m/Text (str "Алдаа гарлаа: " error)))
+        
+        (empty? items)
+        (m/Center
+         .child
+         (m/Column
+          .mainAxisAlignment m.MainAxisAlignment/center
+          .children
+          [(m/Icon m.Icons/inbox .size 64.0 .color m.Colors/grey)
+           (m/SizedBox .height 16.0)
+           (mgl/MongolText "Эшлэл одоогоор алга байна." .style (m/TextStyle .fontFamily "OyunQaganTig" .color m.Colors/grey))]))
+        
+        :else
+        (m/RefreshIndicator
+         .onRefresh (fn [] (dc/Future.sync fetch-data!))
+         .child
+         (m/ListView.builder
+          .padding (m/EdgeInsets.only .top 8.0 .bottom 32.0)
+          .itemCount (count items)
+          .itemBuilder
+          (fn [_ idx]
+            (highlight-card local-ctx (nth items idx) fetch-data!)))))))))

@@ -20,6 +20,7 @@
    [rich-editor.components.editor :as editor]
    [rich-editor.components.text-field :as custom-tf]
    [rich-editor.components.node-view :as node-view]
+   [rich-editor.components.toolbar :as toolbar]
    
    ;; Editor core commands and configs
    [rich-editor.commands.editor-commands :as editor-cmd]
@@ -181,4 +182,6 @@
            :on-submitted (fn [_]
                            (when-let [first-id (first (:root @!editor-state))]
                              (editor-cmd/focus-block !editor-state first-id 0)))
-           :style (m/TextStyle .fontSize 20.0 .fontWeight m.FontWeight/bold .fontFamily "OyunQaganTig")}))))))))
+           :style (m/TextStyle .fontSize 20.0 .fontWeight m.FontWeight/bold .fontFamily "OyunQaganTig")}))
+        
+        :toolbar (toolbar/mongol-toolbar !editor-state)))))))
