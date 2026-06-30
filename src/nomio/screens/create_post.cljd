@@ -1,5 +1,6 @@
 (ns nomio.screens.create-post
-  "Creation Center: A smart unified editor handling both Creating and Editing posts, with Reference Insertion."
+  "Creation Center: A smart unified editor handling both Creating and Editing posts, with Reference Insertion.
+   Updated with Tenger Blue design system and fixed IME candidate visibility."
   (:require
    ["package:flutter/material.dart" :as m]
    ["dart:core" :as dc]
@@ -10,6 +11,7 @@
    [nomio.core.api :as api]
    [nomio.core.state :as state]
    [nomio.utils.editor-parser :as editor-parser]
+   [nomio.utils.tokens :as tokens]
    [components.toast :as toast]
    
    ;; Reference Search and Custom Cards
@@ -88,7 +90,9 @@
      :context ctx
      :managed [title-focus-node (m/FocusNode)
                title-ctrl (m/TextEditingController .text (or edit-title ""))]
-     :get {{{:flds [primary surface outlineVariant onSurfaceVariant]} .-colorScheme} m/Theme}
+               
+     ;; 🌟 核心修复 1：必须监听输入法引擎抛出的 refresh 信号！
+     :watch [tick !refresh-tick]
      
      :let [publish!
            (fn []
@@ -116,19 +120,22 @@
                                         (toast/error ctx clean-err)))))))))]
 
      (m/Scaffold
-      .backgroundColor surface
-      .resizeToAvoidBottomInset false
+      ;; Apply Tenger Blue background
+      .backgroundColor tokens/bg-color
+      
+      ;; 🌟 核心修复 2：彻底移除 .resizeToAvoidBottomInset false，防止虚拟键盘物理遮挡候选词工具栏！
 
       .appBar
       (m/AppBar
        .elevation 0.0
-       .backgroundColor surface
-       .title (m/Text (if is-editing? "Засварлах" "") .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0 .color onSurfaceVariant))
+       .backgroundColor m.Colors/transparent
+       .iconTheme (m/IconThemeData .color tokens/primary-color)
+       .title (m/Text (if is-editing? "Засварлах" "") .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0 .color tokens/text-secondary))
        .actions
        [(f/widget
          :watch [uploading? !uploading?]
          (if uploading?
-           (m/Padding .padding (m/EdgeInsets.all 14.0) .child (m/SizedBox .width 20.0 .height 20.0 .child (m/CircularProgressIndicator .strokeWidth 2.0)))
+           (m/Padding .padding (m/EdgeInsets.all 14.0) .child (m/SizedBox .width 20.0 .height 20.0 .child (m/CircularProgressIndicator .strokeWidth 2.0 .color tokens/primary-color)))
            (m/IconButton .icon (m/Icon m.Icons/image_outlined) .onPressed #())))
         
         (m/IconButton 
@@ -152,7 +159,11 @@
           .padding (m/EdgeInsets.symmetric .vertical 8.0 .horizontal 16.0)
           .child
           (m/ElevatedButton
-           .style (m/ElevatedButton.styleFrom .backgroundColor primary .foregroundColor m.Colors/white)
+           .style (m/ElevatedButton.styleFrom 
+                   .backgroundColor tokens/primary-color 
+                   .foregroundColor m.Colors/white
+                   .elevation 0.0
+                   .shape (m/RoundedRectangleBorder .borderRadius (m/BorderRadius.circular 12.0)))
            .onPressed (if publishing? nil (fn [] (publish!) nil))
            .child (if publishing?
                     (m/SizedBox .width 16.0 .height 16.0 .child (m/CircularProgressIndicator .color m.Colors/white .strokeWidth 2.0))
@@ -164,13 +175,13 @@
        (editor/mongol-editor
         !editor-state
         
-        ;; 🌟 HERE: Combine default configurations with custom rendering rules
+        ;; Combine default configurations with custom rendering rules
         (merge defaults/full-default-config {:custom-block-renderers ref-cards/nomio-custom-renderers})
         
         :leading-widget
         (m/Container
          .width 80.0
-         .decoration (m/BoxDecoration .border (m/Border .right (m/BorderSide .color outlineVariant .width 1.0)))
+         .decoration (m/BoxDecoration .border (m/Border .right (m/BorderSide .color (.withOpacity tokens/primary-color 0.2) .width 1.0)))
          .padding (m/EdgeInsets.only .left 20.0 .top 20.0 .right 8.0)
          .child
          (custom-tf/text-field
@@ -182,6 +193,6 @@
            :on-submitted (fn [_]
                            (when-let [first-id (first (:root @!editor-state))]
                              (editor-cmd/focus-block !editor-state first-id 0)))
-           :style (m/TextStyle .fontSize 20.0 .fontWeight m.FontWeight/bold .fontFamily "OyunQaganTig")}))
+           :style (m/TextStyle .fontSize 20.0 .fontWeight m.FontWeight/bold .fontFamily "OyunQaganTig" .color tokens/text-primary)}))
         
         :toolbar (toolbar/mongol-toolbar !editor-state)))))))

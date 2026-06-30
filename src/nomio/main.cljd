@@ -1,14 +1,16 @@
 (ns nomio.main
-  "App global entry point: Responsible for resource warmup, permission validation, and mounting the root view."
+  "App global entry point: Responsible for resource warmup, permission validation, and mounting the root view.
+   Configured with the Tenger Blue design system."
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:flutter/foundation.dart" :as foundation :refer [kIsWeb]]
    [cljd.flutter :as f]
-   
+
    ;; Nomio Core Architecture
    [nomio.core.router :as router]
    [nomio.core.state :as state]
-   
+   [nomio.utils.tokens :as tokens]
+
    ;; Cross-platform IME Engine Dictionary Libraries
    [virtual-keyboard.input-control :as input-control]
    [ime-core.remote-api :as remote]
@@ -46,21 +48,14 @@
 
   (f/run
    (f/widget
-    ;; Watch global state to easily implement one-click dark/light mode toggling later
     :watch [app-state state/!app-state]
 
     (m/MaterialApp
      .title "Nomio"
      .debugShowCheckedModeBanner false
 
-     ;; Global Theme Configuration: Set traditional Mongolian font as the app's default font
-     .theme (m/ThemeData
-             .colorSchemeSeed m/Colors.blue
-             .brightness (if (= (:theme app-state) :dark)
-                           m.Brightness/dark
-                           m.Brightness/light)
-             .fontFamily "OyunQaganTig"
-             .useMaterial3 true)
+     ;; 🌟 Apply the global Tenger Blue Theme from tokens
+     .theme tokens/tenger-theme
 
      ;; Routing Dispatch Center: Delegate all navigation rules to router.cljd
      .initialRoute "/"

@@ -1,5 +1,6 @@
 (ns nomio.screens.daily-review
-  "Daily Review screen featuring the immersive Tenger Blue flashcard UI."
+  "Daily Review screen featuring the immersive Tenger Blue flashcard UI.
+   Fixed JSON String key access for Dart interop."
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:mongol/mongol.dart" :as mgl]
@@ -34,9 +35,10 @@
 (defn- review-card 
   "Renders a single flashcard optimized for vertical Mongolian text."
   [item]
-  (let [highlight (get item :highlight)
-        content (get highlight :content "Хоосон")
-        source-ref (get highlight :source_ref "Тодорхойгүй")]
+  ;; 🌟 FIX: Use string keys to safely access Dart JSON map, with keyword fallbacks just in case
+  (let [highlight (or (get item "highlight") (get item :highlight) {})
+        content (or (get highlight "content") (get highlight :content) "Хоосон")
+        source-ref (or (get highlight "source_ref") (get highlight :source_ref) "Тодорхойгүй")]
     (m/Padding
      .padding (m/EdgeInsets.only .left 32.0 .right 32.0 .top 16.0 .bottom 32.0)
      .child
@@ -99,10 +101,12 @@
            handle-grade! 
            (fn [grade]
              (let [current-item (nth items current-idx)
-                   duration-ms (.inMilliseconds (.difference (dc/DateTime.now) @!card-start-time))]
+                   duration-ms (.inMilliseconds (.difference (dc/DateTime.now) @!card-start-time))
+                   ;; 🌟 FIX: Safe access to the review item ID using string key
+                   item-id (or (get current-item "id") (get current-item :id))]
                
                ;; Submit the review to the backend
-               (api/submit-review (get current-item :id) grade :duration-ms duration-ms)
+               (api/submit-review item-id grade :duration-ms duration-ms)
                
                ;; Advance to the next card
                (swap! !current-idx inc)
@@ -133,7 +137,7 @@
           .mainAxisAlignment m.MainAxisAlignment/center
           .children
           [(m/Container .padding (m/EdgeInsets.all 24.0) .decoration (m/BoxDecoration .color tokens/srs-easy-bg .shape m.BoxShape/circle)
-            .child (m/Icon m.Icons/auto_awesome .color tokens/srs-easy .size 64.0))
+             .child (m/Icon m.Icons/auto_awesome .color tokens/srs-easy .size 64.0))
            (m/SizedBox .height 32.0)
            (mgl/MongolText "Бүх картыг давтаж дууслаа!" .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 22.0 .color tokens/text-primary .fontWeight m.FontWeight/bold))
            (m/SizedBox .height 12.0)

@@ -1,5 +1,6 @@
 (ns nomio.screens.post-detail
-  "Post detail screen: A pure knowledge reading view for content and backlinks."
+  "Post detail screen: A pure knowledge reading view for content and backlinks.
+   Fully upgraded to Tenger Blue aesthetics."
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:mongol/mongol.dart" :as mgl]
@@ -10,7 +11,7 @@
    [nomio.widgets.block-renderer :as block-renderer]
    [nomio.widgets.reaction-bar :as reaction-bar]
    [nomio.utils.time-format :as time-format]
-   [components.tokens :as tokens]
+   [nomio.utils.tokens :as tokens]
    [components.toast :as toast]))
 
 ;; =============================================================================
@@ -73,8 +74,6 @@
 
     (f/widget
      :context ctx
-     :get {{{:flds [surface onSurface onSurfaceVariant outlineVariant primary error]} .-colorScheme
-            {:flds [headlineMedium titleSmall titleMedium]} .-textTheme} m/Theme}
      :watch [post !post
              loading-post? !loading-post?
              backlinks !backlinks
@@ -86,13 +85,13 @@
            combined-blocks (concat core-blocks backlink-blocks)]
 
      (m/Scaffold
-      .backgroundColor surface
+      .backgroundColor tokens/surface-color
 
       .appBar
       (m/AppBar
        .elevation 0.0
-       .backgroundColor surface
-       .leading (m/IconButton .icon (m/Icon m.Icons/arrow_back .color onSurface)
+       .backgroundColor m.Colors/transparent
+       .leading (m/IconButton .icon (m/Icon m.Icons/arrow_back .color tokens/primary-color)
                               .onPressed #(m/Navigator.pop ctx))
        .actions
        [;; Security: Only show action buttons if current user is the author
@@ -104,7 +103,7 @@
            .children
            [;; A. Delete Button
             (m/IconButton
-             .icon (m/Icon m.Icons/delete_outline .color error)
+             .icon (m/Icon m.Icons/delete_outline .color tokens/srs-again)
              .tooltip "Устгах"
              .onPressed (fn []
                           (m/showDialog
@@ -112,11 +111,14 @@
                            .builder
                            (fn [dialog-ctx]
                              (m/AlertDialog
-                              .title (m/Text "Нийтлэл устгах" .style (m/TextStyle .fontFamily "OyunQaganTig"))
-                              .content (m/Text "Та энэ нийтлэлийг устгахдаа итгэлтэй байна уу? Энэ үйлдлийг буцаах боломжгүй." .style (m/TextStyle .fontFamily "OyunQaganTig"))
+                              .backgroundColor tokens/surface-color
+                              .shape (m/RoundedRectangleBorder .borderRadius (m/BorderRadius.circular 20.0))
+                              .title (m/Text "Нийтлэл устгах" .style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-primary .fontWeight m.FontWeight/bold))
+                              .content (m/Text "Та энэ нийтлэлийг устгахдаа итгэлтэй байна уу? Энэ үйлдлийг буцаах боломжгүй." .style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-secondary .height 1.4))
                               .actions
                               [(m/TextButton
                                 .onPressed #(m/Navigator.pop dialog-ctx)
+                                .style (m/TextButton.styleFrom .foregroundColor tokens/text-secondary)
                                 .child (m/Text "Үгүй" .style (m/TextStyle .fontFamily "OyunQaganTig")))
                                (m/TextButton
                                 .onPressed (fn []
@@ -127,18 +129,19 @@
                                                           (m/Navigator.pop ctx)))
                                                  (.catchError (fn [err]
                                                                 (toast/error ctx (str "Алдаа: " err))))))
-                                .child (m/Text "Устгах" .style (m/TextStyle .fontFamily "OyunQaganTig" .color error)))])))
+                                .style (m/TextButton.styleFrom .foregroundColor tokens/srs-again)
+                                .child (m/Text "Устгах" .style (m/TextStyle .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold)))])))
                           nil))
 
             ;; B. Edit Button
             (m/IconButton
-             .icon (m/Icon m.Icons/edit_note .color onSurface)
+             .icon (m/Icon m.Icons/edit_note .color tokens/primary-color)
              .tooltip "Засварлах"
              .onPressed (fn []
                           (-> (m/Navigator.pushNamed ctx "/create"
                                                      .arguments {:edit-id (get post "id")
                                                                  :edit-title (get post "title")
-                                                                 ;; CRITICAL: Only send core blocks to the editor to prevent saving backlinks as actual content
+                                                                 ;; CRITICAL: Only send core blocks to the editor
                                                                  :edit-blocks core-blocks})
                               (.then (fn [_]
                                        ;; Reload both post and backlinks after editing
@@ -147,60 +150,61 @@
                           nil))])
 
           ;; Fallback if not the author
-          (m/SizedBox.shrink))])
+          (m/SizedBox.shrink))
+        (m/SizedBox .width 16.0)])
 
       .body
       (m/SafeArea
        .child
        (if loading-post?
-         (m/Center .child (m/CircularProgressIndicator))
+         (m/Center .child (m/CircularProgressIndicator .color tokens/primary-color))
 
          (if (nil? post)
-           (m/Center .child (mgl/MongolText "Нийтлэл олдсонгүй" .style (m/TextStyle .color onSurfaceVariant)))
+           (m/Center .child (mgl/MongolText "Нийтлэл олдсонгүй" .style (m/TextStyle .color tokens/text-secondary .fontSize 16.0)))
 
            (m/ListView
             .scrollDirection m.Axis/horizontal
-            .padding (m/EdgeInsets.only .left 24.0 .right 40.0 .top 20.0 .bottom 20.0)
+            .physics (m/BouncingScrollPhysics.)
+            .padding (m/EdgeInsets.only .left 32.0 .right 80.0 .top 20.0 .bottom 20.0)
             .children
             [;; 1. Post Header
              (m/Row
               .crossAxisAlignment m.CrossAxisAlignment/start
               .children
               [(mgl/MongolText (or (get post "title") "Гарчиггүй")
-                               .style (.copyWith headlineMedium
-                                                 .fontFamily "OyunQaganTig"
-                                                 .fontWeight m.FontWeight/bold
-                                                 .color onSurface))])
+                               .style (m/TextStyle .fontSize 32.0
+                                                   .fontFamily "OyunQaganTig"
+                                                   .fontWeight m.FontWeight/bold
+                                                   .color tokens/text-primary))])
 
-             (m/SizedBox .width 32.0)
+             (m/SizedBox .width 40.0)
 
-             ;; 2 & 5. Unified Content Rendering (Core Text + Injected Backlinks)
+             ;; 2 & 5. Unified Content Rendering
              (m/Row
               .crossAxisAlignment m.CrossAxisAlignment/start
-              ;; 🌟 核心修复与接入点：使用匿名函数将 block 和 post-id 一起喂给渲染器
               .children (into [] (keep #(block-renderer/render-block % post-id) combined-blocks)))
 
-             (m/SizedBox .width 32.0)
+             (m/SizedBox .width 48.0)
 
              ;; 3. Author Info
              (m/InkWell
               .onTap (fn []
                        (m/Navigator.pushNamed ctx "/profile" .arguments {:id (get post "author_id")})
                        nil)
-              .borderRadius (m/BorderRadius.circular 12.0)
+              .borderRadius (m/BorderRadius.circular 16.0)
               .child
               (m/Padding
-               .padding (m/EdgeInsets.all 8.0)
+               .padding (m/EdgeInsets.all 16.0)
                .child
                (m/Column
                 .mainAxisAlignment m.MainAxisAlignment/start
                 .crossAxisAlignment m.CrossAxisAlignment/center
                 .children
                 [(m/CircleAvatar
-                  .radius 20.0
-                  .backgroundColor primary
-                  .child (m/Icon m.Icons/person .color m.Colors/white .size 24.0))
-                 (m/SizedBox .height 12.0)
+                  .radius 24.0
+                  .backgroundColor tokens/primary-container
+                  .child (m/Icon m.Icons/person .color tokens/primary-color .size 24.0))
+                 (m/SizedBox .height 16.0)
                  (mgl/MongolText
                   (or (let [nickname (get post "author_nickname")
                             username (get post "author_username")]
@@ -210,17 +214,17 @@
                           username (str "@" username)
                           :else nil))
                       (str "Хэрэглэгч " (or (get post "author_id") "тодорхойгүй")))
-                  .style (.copyWith titleSmall .fontFamily "OyunQaganTig" .color primary))
+                  .style (m/TextStyle .fontSize 14.0 .fontFamily "OyunQaganTig" .color tokens/primary-color .fontWeight m.FontWeight/bold))
                  (m/SizedBox .height 8.0)
                  (mgl/MongolText (or (time-format/format-relative (get post "created_at")) "")
-                                 .style (.copyWith titleSmall .fontFamily "OyunQaganTig" .color onSurfaceVariant))])))
+                                 .style (m/TextStyle .fontSize 13.0 .fontFamily "OyunQaganTig" .color tokens/text-secondary))])))
 
              (m/SizedBox .width 32.0)
 
              ;; 4. Visual Divider
              (m/Padding
-              .padding (m/EdgeInsets.symmetric .horizontal 16.0)
-              .child (m/VerticalDivider .width 1.0 .thickness 1.0 .color outlineVariant))
+              .padding (m/EdgeInsets.symmetric .horizontal 24.0)
+              .child (m/VerticalDivider .width 1.0 .thickness 1.0 .color (.withOpacity tokens/text-secondary 0.2)))
 
              ;; 6. Reaction Bar
              (m/Padding

@@ -1,20 +1,56 @@
 (ns nomio.widgets.block-renderer
   "Read-only rich text block renderer: Parses backend JSON blocks into Flutter native Widgets.
-   Integrated with custom MglSelectableText and Overlay for native vertical Universal Capture."
+   Integrated with manual GestureDetectors to drive the MglSelectableText selection engine.
+   Fully styled with Tenger Blue aesthetics."
   (:require
    ["package:flutter/material.dart" :as m]
+   ["package:flutter/gestures.dart" :as g]
    ["package:mongol/mongol.dart" :as mgl]
    ["dart:core" :as dc]
    ["dart:convert" :as convert]
    [cljd.flutter :as f]
-   [components.tokens :as tokens]
+   [nomio.utils.tokens :as tokens]
    [components.toast :as toast]
    ["package:mgl_editor_core/mgl_selectable_text.dart" :as mgl-sel]
    [nomio.widgets.capture-modal :as capture]))
 
 ;; =============================================================================
-;; 1. Inline Spans Slicer
+;; 1. Core Selection Utilities (Ported from node-view)
 ;; =============================================================================
+
+(defn- mgl-separator? 
+  "Determines if a character is a word boundary. Excludes Mongolian modifiers."
+  [^String s idx]
+  (let [code (.codeUnitAt s idx)]
+    (or (<= code 31) 
+        (== code 0x0020) 
+        (== code 0x3000) 
+        (== code 0x202E) 
+        (contains? #{"." "," "!" "?" "：" "；" "“" "”" "（" "）" "(" ")" "《" "》" "〈" "〉" "、" "\n" "\t"} 
+                   (subs s idx (inc idx))))))
+
+(defn- get-word-boundaries 
+  "Calculates the [start, end] boundaries of the word under the given offset."
+  [^String text offset]
+  (let [len (count text)
+        safe-off (max 0 (min offset len))]
+    (if (and (< safe-off len) (mgl-separator? text safe-off))
+      [safe-off safe-off]
+      (let [start (loop [i (dec safe-off)]
+                    (if (or (< i 0) (mgl-separator? text i))
+                      (inc i)
+                      (recur (dec i))))
+            end (loop [i safe-off]
+                  (if (or (>= i len) (mgl-separator? text i))
+                    i
+                    (recur (inc i))))]
+        [start end]))))
+
+(defn- get-safe-offset [text-key global-pos content-len]
+  (try
+    (let [pos (mgl-sel.MglSelectableText/getPositionAtOffset text-key global-pos)]
+      (max 0 (min (.-offset pos) content-len)))
+    (catch dc/Exception _ 0)))
 
 (defn- build-text-spans 
   "Slices plain text with span markers and converts them into an array of Flutter TextSpans."
@@ -47,283 +83,318 @@
                        (conj acc (m/TextSpan .text (subs text start end) .style styled-font)))))))))))
 
 ;; =============================================================================
-;; 2. Selectable Text Wrapper using Overlay & Custom MglSelectableText
+;; 2. Persistent State Registry
+;; =============================================================================
+
+(defonce !block-registry (atom {}))
+
+(defn- get-block-context [block-id]
+  (let [existing (get @!block-registry block-id)]
+    (if existing
+      existing
+      (let [new-ctx {:text-key (m/GlobalKey.)
+                     :!overlay (atom nil)
+                     :!menu-data (atom {:dx 0 :dy 0 :text ""})
+                     :!selection (atom nil)}]
+        (swap! !block-registry assoc block-id new-ctx)
+        new-ctx))))
+
+;; =============================================================================
+;; 3. Manual Gesture Driver & Selectable Text Wrapper
 ;; =============================================================================
 
 (defn- render-selectable-text 
-  "Uses custom MglSelectableText for vertical text selection and injects a 
-   custom OverlayEntry to display a perfectly positioned action menu."
-  [ctx text-content spans base-font post-id]
+  "Wraps the dumb MglSelectableText in a GestureDetector to manually drive selection states."
+  [ctx block-id text-content spans base-font post-id]
   (let [spans-array (build-text-spans text-content spans base-font)
-        
-        on-highlight-fn 
-        (fn [selected-text]
-          (capture/show-capture-dialog! ctx selected-text (str post-id) "post_block"))
-        
-        !selection (atom nil)
-        !overlay-entry (atom nil)]
+        text-len (count text-content)
+        on-highlight-fn #(capture/show-capture-dialog! ctx % (str post-id) "post_block")]
     
     (f/widget
      :context local-ctx
-     :let [text-key (m/GlobalKey.)
+     :let [{:keys [text-key !overlay !menu-data !selection]} (get-block-context block-id)
            
            hide-menu! 
            (fn []
-             (when-let [entry @!overlay-entry]
+             (when-let [entry @!overlay]
                (.remove entry)
-               (reset! !overlay-entry nil))
-             ;; 🌟 FIXED: Explicitly return nil to satisfy Dart's strict type checking
+               (reset! !overlay nil))
              nil)
                
            show-menu! 
            (fn [sel]
-             (hide-menu!)
              (when (and sel (not (.-isCollapsed sel)))
                (let [start-offset (.-baseOffset sel)
                      global-pos (mgl-sel.MglSelectableText/getGlobalOffsetForCaret text-key start-offset)
-                     selected-text (if (.-isValid sel) (.textInside sel text-content) "")
-                     
-                     target-dx (if global-pos (+ (.-dx global-pos) 40.0) 100.0)
-                     target-dy (if global-pos (.-dy global-pos) 100.0)
-                     
-                     entry (m/OverlayEntry
-                            .builder
-                            (fn [b-ctx]
-                              (m/Positioned
-                               .left target-dx
-                               .top target-dy
-                               .child
-                               (m/Material
-                                .elevation 6.0
-                                .color m.Colors/black
-                                .borderRadius (m/BorderRadius.circular 8.0)
-                                .child
-                                (m/InkWell
-                                 .onTap (fn []
-                                          (hide-menu!)
-                                          (reset! !selection nil) 
-                                          (when-not (empty? selected-text)
-                                            (on-highlight-fn selected-text)))
-                                 .borderRadius (m/BorderRadius.circular 8.0)
-                                 .child
-                                 (m/Padding
-                                  .padding (m/EdgeInsets.symmetric .horizontal 16.0 .vertical 12.0)
-                                  .child
-                                  (m/Row
-                                   .mainAxisSize m.MainAxisSize/min
-                                   .children
-                                   [(m/Icon m.Icons/edit_note .color m.Colors/white .size 18.0)
-                                    (m/SizedBox .width 8.0)
-                                    (mgl/MongolText "Эшлэх"
-                                                    .style (m/TextStyle .fontFamily "OyunQaganTig" 
-                                                                        .color m.Colors/white 
-                                                                        .fontSize 14.0 
-                                                                        .fontWeight m.FontWeight/bold))])))))))]
+                     selected-text (if (.-isValid sel) (.textInside sel text-content) "")]
                  
-                 (reset! !overlay-entry entry)
-                 (.insert (m/Overlay.of local-ctx) entry)))
-             ;; 🌟 FIXED: Explicitly return nil
+                 (reset! !menu-data {:dx (if global-pos (+ (.-dx global-pos) 40.0) 100.0)
+                                     :dy (if global-pos (.-dy global-pos) 100.0)
+                                     :text selected-text})
+                 
+                 (when (nil? @!overlay)
+                   (let [entry (m/OverlayEntry
+                                .builder
+                                (fn [b-ctx]
+                                  (f/widget
+                                   :watch [data !menu-data]
+                                   (m/Positioned
+                                    .left (:dx data)
+                                    .top (:dy data)
+                                    .child
+                                    (m/Material
+                                     .elevation 8.0
+                                     .color tokens/text-primary
+                                     .borderRadius (m/BorderRadius.circular 12.0)
+                                     .child
+                                     (m/InkWell
+                                      .onTap (fn []
+                                               (hide-menu!)
+                                               (reset! !selection nil)
+                                               (when-not (empty? (:text data))
+                                                 (on-highlight-fn (:text data))))
+                                      .borderRadius (m/BorderRadius.circular 12.0)
+                                      .child
+                                      (m/Padding
+                                       .padding (m/EdgeInsets.symmetric .horizontal 20.0 .vertical 16.0)
+                                       .child
+                                       (m/Row
+                                        .mainAxisSize m.MainAxisSize/min
+                                        .children
+                                        [(m/Icon m.Icons/edit_note .color m.Colors/white .size 20.0)
+                                         (m/SizedBox .width 12.0)
+                                         (mgl/MongolText "Эшлэх"
+                                                         .style (m/TextStyle .fontFamily "OyunQaganTig" 
+                                                                             .color m.Colors/white 
+                                                                             .fontSize 15.0 
+                                                                             .fontWeight m.FontWeight/bold))]))))))))]
+                     (reset! !overlay entry)
+                     (.insert (m/Overlay.of local-ctx) entry)))))
              nil)]
-     
+             
      :watch [current-sel !selection]
      
-     (m/Listener
-      .onPointerDown (fn [_] (hide-menu!))
+     (m/GestureDetector
+      .behavior m.HitTestBehavior/translucent
+      .dragStartBehavior g/DragStartBehavior.down
+      
+      ;; 1. Tap anywhere to clear the selection
+      .onTapUp (fn [_] 
+                 (hide-menu!) 
+                 (reset! !selection nil))
+      
+      ;; 2. Long press to select the current word
+      .onLongPressStart (fn [^m/LongPressStartDetails details]
+                          (hide-menu!)
+                          (let [offset (get-safe-offset text-key (.globalPosition details) text-len)
+                                [w-start w-end] (get-word-boundaries text-content offset)
+                                new-sel (m/TextSelection. .baseOffset w-start .extentOffset w-end)]
+                            (reset! !selection new-sel)
+                            (if (not (.-isCollapsed new-sel))
+                              (show-menu! new-sel))))
+      
+      ;; 3. Start dragging
+      .onPanStart (fn [^m/DragStartDetails details]
+                    (hide-menu!)
+                    (let [offset (get-safe-offset text-key (.globalPosition details) text-len)]
+                      (reset! !selection (m/TextSelection. .baseOffset offset .extentOffset offset))))
+      
+      ;; 4. Update dragging
+      .onPanUpdate (fn [^m/DragUpdateDetails details]
+                     (when-let [sel @!selection]
+                       (let [offset (get-safe-offset text-key (.globalPosition details) text-len)
+                             new-sel (m/TextSelection. .baseOffset (.-baseOffset sel) .extentOffset offset)]
+                         (reset! !selection new-sel)
+                         (if (not (.-isCollapsed new-sel))
+                           (show-menu! new-sel)
+                           (hide-menu!)))))
+
       .child
       (mgl-sel/MglSelectableText
        .textKey text-key
        .textSpan (m/TextSpan .children spans-array)
        .selection current-sel
        .showStartHandle true
-       .showEndHandle true
-       .onSelectionChanged (fn [new-sel]
-                             (reset! !selection new-sel)
-                             (if (and new-sel (not (.-isCollapsed new-sel)))
-                               (show-menu! new-sel)
-                               (hide-menu!))
-                             ;; 🌟 FIXED: Explicitly return nil
-                             nil))))))
+       .showEndHandle true)))))
 
 ;; =============================================================================
-;; 3. Core: Block Renderer
+;; 4. Core: Block Renderer
 ;; =============================================================================
 
 (defn render-block 
   "Renders the corresponding read-only Mongolian component based on the backend block dictionary.
    Accepts post-id to tag captured highlights with their origin."
   [block post-id] 
-  (f/widget
-   :get {{{:flds [primary onSurface onSurfaceVariant surfaceVariant outlineVariant]} .-colorScheme
-          {:flds [bodyMedium labelSmall]} .-textTheme} m/Theme}
-   :context ctx
+  (let [b-id (or (get block "id") (get block :id) (str (hash block)))]
+    (f/widget
+     :context ctx
+     :key (m/ValueKey. b-id)
+     
+     :let [b-type (get block "type" "paragraph")
+           text-content (or (get block "text") (get block "content") "")
+           spans (or (get block "spans") (get block "content-spans") [])
+           image-url (or (get block "url") (get-in block ["data" "url"]) "")
+           
+           raw-data-val (or (get block "data") (get block :data))
+           raw-data (cond
+                      (string? raw-data-val) (try (convert/jsonDecode raw-data-val) (catch dc/Exception _ {}))
+                      raw-data-val raw-data-val
+                      :else {})
+                      
+           ref-post-id (or (get raw-data "ref-post-id")
+                           (get raw-data "ref_post_id")
+                           (get raw-data :ref-post-id)
+                           (get block "ref_post_id")
+                           (get block "ref-post-id")
+                           (get block :ref_post_id)
+                           (get block "source_post_id"))
+           
+           base-font (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-primary)]
 
-   :key (m/ValueKey. (get block "id"))
-   
-   :let [b-type (get block "type" "paragraph")
-         text-content (or (get block "text") (get block "content") "")
-         spans (or (get block "spans") (get block "content-spans") [])
-         image-url (or (get block "url") (get-in block ["data" "url"]) "")
-         
-         raw-data-val (or (get block "data") (get block :data))
-         raw-data (cond
-                    (string? raw-data-val) (try (convert/jsonDecode raw-data-val) (catch dc/Exception _ {}))
-                    raw-data-val raw-data-val
-                    :else {})
-                    
-         ref-post-id (or (get raw-data "ref-post-id")
-                         (get raw-data "ref_post_id")
-                         (get raw-data :ref-post-id)
-                         (get block "ref_post_id")
-                         (get block "ref-post-id")
-                         (get block :ref_post_id)
-                         (get block "source_post_id"))
-         
-         base-font (m/TextStyle .fontFamily "OyunQaganTig" .color onSurface)]
-
-     (m/Padding
-      .padding (m/EdgeInsets.only .right (tokens/space :l))
-      .child
-      (case b-type
-        "post-quote"
-        (m/GestureDetector
-         .behavior m.HitTestBehavior/opaque
-         .onTap (fn []
-                  (if ref-post-id
-                    (m/Navigator.pushNamed ctx "/post" .arguments {:id ref-post-id})
-                    (do 
-                      (dc/print (str "🚨 [DEBUG ALARM] Missing ID! Block data is: " block))
-                      (toast/error ctx "Уучлаарай, холбоосны ID олдсонгүй")))
-                  nil)
-         .child
-         (m/Container
-          .padding (m/EdgeInsets.all (tokens/space :m))
-          .decoration (m/BoxDecoration
-                       .color (.withOpacity primary 0.05)
-                       .border (m/Border.all .color (.withOpacity primary 0.3))
-                       .borderRadius (m/BorderRadius.circular (tokens/radius :m)))
-          .child
-          (m/Column
-           .crossAxisAlignment m.CrossAxisAlignment/start
-           .children
-           [(m/Icon m.Icons/link .size 20.0 .color primary)
-            (m/SizedBox .height 12.0)
-            (m/Expanded
-             .child
-             (mgl/MongolText text-content
-                             .style (.copyWith bodyMedium .color primary .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold)
-                             .maxLines 5
-                             .overflow m.TextOverflow/ellipsis))])))
-
-        "block-ref"
-        (m/GestureDetector
-         .behavior m.HitTestBehavior/opaque
-         .onTap (fn []
-                  (if ref-post-id
-                    (m/Navigator.pushNamed ctx "/post" .arguments {:id ref-post-id})
-                    (do 
-                      (dc/print (str "🚨 [DEBUG ALARM] Missing ID! Block data is: " block))
-                      (toast/error ctx "Уучлаарай, холбоосны ID олдсонгүй")))
-                  nil)
-         .child
-         (m/Container
-          .padding (m/EdgeInsets.all (tokens/space :m))
-          .decoration (m/BoxDecoration
-                       .color surfaceVariant
-                       .border (m/Border.all .color outlineVariant)
-                       .borderRadius (m/BorderRadius.circular (tokens/radius :m)))
-          .child
-          (m/Column
-           .crossAxisAlignment m.CrossAxisAlignment/start
-           .children
-           [(m/Icon m.Icons/format_quote .size 20.0 .color onSurfaceVariant)
-            (m/SizedBox .height 12.0)
-            (m/Expanded
-             .child
-             (mgl/MongolText text-content
-                             .style (.copyWith bodyMedium .color onSurfaceVariant .fontStyle m.FontStyle/italic .fontFamily "OyunQaganTig")
-                             .maxLines 5
-                             .overflow m.TextOverflow/ellipsis))])))
-
-        "backlink"
-        (m/GestureDetector
-         .behavior m.HitTestBehavior/opaque
-         .onTap (fn []
-                  (if ref-post-id
-                    (m/Navigator.pushNamed ctx "/post" .arguments {:id ref-post-id})
-                    (do 
-                      (dc/print (str "🚨 [DEBUG ALARM] Missing ID! Block data is: " block))
-                      (toast/error ctx "Уучлаарай, холбоосны ID олдсонгүй")))
-                  nil)
-         .child
-         (m/Container
-          .padding (m/EdgeInsets.all (tokens/space :m))
-          .decoration (m/BoxDecoration
-                       .color surfaceVariant
-                       .border (m/Border.all .color outlineVariant)
-                       .borderRadius (m/BorderRadius.circular (tokens/radius :m)))
-          .child
-          (m/Column
-           .crossAxisAlignment m.CrossAxisAlignment/start
-           .children
-           [(m/Row
+       (m/Padding
+        .padding (m/EdgeInsets.only .right 24.0)
+        .child
+        (case b-type
+          "post-quote"
+          (m/GestureDetector
+           .behavior m.HitTestBehavior/opaque
+           .onTap (fn []
+                    (if ref-post-id
+                      (m/Navigator.pushNamed ctx "/post" .arguments {:id ref-post-id})
+                      (do 
+                        (dc/print (str "🚨 [DEBUG ALARM] Missing ID! Block data is: " block))
+                        (toast/error ctx "Уучлаарай, холбоосны ID олдсонгүй")))
+                    nil)
+           .child
+           (m/Container
+            .padding (m/EdgeInsets.all 16.0)
+            .decoration (m/BoxDecoration
+                         .color (.withOpacity tokens/primary-color 0.05)
+                         .border (m/Border.all .color (.withOpacity tokens/primary-color 0.2))
+                         .borderRadius (m/BorderRadius.circular 16.0))
+            .child
+            (m/Column
+             .crossAxisAlignment m.CrossAxisAlignment/start
              .children
-             [(m/Icon (if (= (get block "quote_type") "block") m.Icons/format_quote m.Icons/link)
-                      .size 16.0 .color primary)
-              (m/SizedBox .width 8.0)
-              (mgl/MongolText "Иш татсан"
-                              .style (.copyWith labelSmall .color primary .fontFamily "OyunQaganTig"))])
-            (m/SizedBox .height 16.0)
-            (m/Expanded
-             .child
-             (mgl/MongolText text-content
-                             .style (.copyWith bodyMedium .color onSurfaceVariant .fontFamily "OyunQaganTig")
-                             .maxLines 5
-                             .overflow m.TextOverflow/ellipsis))])))
+             [(m/Icon m.Icons/link .size 20.0 .color tokens/primary-color)
+              (m/SizedBox .height 16.0)
+              (m/Expanded
+               .child
+               (mgl/MongolText text-content
+                               .style (m/TextStyle .fontSize 15.0 .color tokens/primary-color .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold)
+                               .maxLines 5
+                               .overflow m.TextOverflow/ellipsis))])))
 
-        "image"
-        (m/ClipRRect
-         .borderRadius (m/BorderRadius.circular (tokens/radius :s))
-         .child (m/Image.network image-url 
-                                 .width 240.0 
-                                 .fit m.BoxFit/cover
-                                 .loadingBuilder (fn [ctx child progress]
-                                                   (if (nil? progress)
-                                                     child
-                                                     (m/Container
-                                                      .width 240.0 .height 320.0
-                                                      .color outlineVariant
-                                                      .child (m/Center .child (m/CircularProgressIndicator)))))))
+          "block-ref"
+          (m/GestureDetector
+           .behavior m.HitTestBehavior/opaque
+           .onTap (fn []
+                    (if ref-post-id
+                      (m/Navigator.pushNamed ctx "/post" .arguments {:id ref-post-id})
+                      (do 
+                        (dc/print (str "🚨 [DEBUG ALARM] Missing ID! Block data is: " block))
+                        (toast/error ctx "Уучлаарай, холбоосны ID олдсонгүй")))
+                    nil)
+           .child
+           (m/Container
+            .padding (m/EdgeInsets.all 16.0)
+            .decoration (m/BoxDecoration
+                         .color tokens/bg-color
+                         .border (m/Border.all .color (.withOpacity tokens/text-secondary 0.2))
+                         .borderRadius (m/BorderRadius.circular 16.0))
+            .child
+            (m/Column
+             .crossAxisAlignment m.CrossAxisAlignment/start
+             .children
+             [(m/Icon m.Icons/format_quote .size 20.0 .color tokens/text-secondary)
+              (m/SizedBox .height 16.0)
+              (m/Expanded
+               .child
+               (mgl/MongolText text-content
+                               .style (m/TextStyle .fontSize 15.0 .color tokens/text-secondary .fontStyle m.FontStyle/italic .fontFamily "OyunQaganTig")
+                               .maxLines 5
+                               .overflow m.TextOverflow/ellipsis))])))
 
-        "heading-1"
-        (render-selectable-text ctx text-content spans 
-                                (.copyWith base-font .fontSize 28.0 .fontWeight m.FontWeight/w900) 
-                                post-id)
+          "backlink"
+          (m/GestureDetector
+           .behavior m.HitTestBehavior/opaque
+           .onTap (fn []
+                    (if ref-post-id
+                      (m/Navigator.pushNamed ctx "/post" .arguments {:id ref-post-id})
+                      (do 
+                        (dc/print (str "🚨 [DEBUG ALARM] Missing ID! Block data is: " block))
+                        (toast/error ctx "Уучлаарай, холбоосны ID олдсонгүй")))
+                    nil)
+           .child
+           (m/Container
+            .padding (m/EdgeInsets.all 16.0)
+            .decoration (m/BoxDecoration
+                         .color tokens/bg-color
+                         .border (m/Border.all .color (.withOpacity tokens/primary-color 0.2))
+                         .borderRadius (m/BorderRadius.circular 16.0))
+            .child
+            (m/Column
+             .crossAxisAlignment m.CrossAxisAlignment/start
+             .children
+             [(m/Row
+               .children
+               [(m/Icon (if (= (get block "quote_type") "block") m.Icons/format_quote m.Icons/link)
+                        .size 16.0 .color tokens/primary-color)
+                (m/SizedBox .width 8.0)
+                (mgl/MongolText "Иш татсан"
+                                .style (m/TextStyle .fontSize 13.0 .color tokens/primary-color .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold))])
+              (m/SizedBox .height 16.0)
+              (m/Expanded
+               .child
+               (mgl/MongolText text-content
+                               .style (m/TextStyle .fontSize 15.0 .color tokens/text-secondary .fontFamily "OyunQaganTig")
+                               .maxLines 5
+                               .overflow m.TextOverflow/ellipsis))])))
 
-        "heading-2"
-        (render-selectable-text ctx text-content spans 
-                                (.copyWith base-font .fontSize 22.0 .fontWeight m.FontWeight/bold) 
-                                post-id)
+          "image"
+          (m/ClipRRect
+           .borderRadius (m/BorderRadius.circular 16.0)
+           .child (m/Image.network image-url 
+                                   .width 240.0 
+                                   .fit m.BoxFit/cover
+                                   .loadingBuilder (fn [ctx child progress]
+                                                     (if (nil? progress)
+                                                       child
+                                                       (m/Container
+                                                        .width 240.0 .height 320.0
+                                                        .color (.withOpacity tokens/text-secondary 0.1)
+                                                        .child (m/Center .child (m/CircularProgressIndicator .color tokens/primary-color)))))))
 
-        "blockquote"
-        (m/Container
-         .padding (m/EdgeInsets.only .top (tokens/space :m))
-         .decoration (m/BoxDecoration .border (m/Border .top (m/BorderSide .color outlineVariant .width 4.0)))
-         .child (render-selectable-text ctx text-content spans 
-                                        (.copyWith base-font .fontSize 16.0 .fontStyle m.FontStyle/italic .color onSurfaceVariant) 
-                                        post-id))
+          "heading-1"
+          (render-selectable-text ctx b-id text-content spans 
+                                  (.copyWith base-font .fontSize 28.0 .fontWeight m.FontWeight/w900) 
+                                  post-id)
 
-        "list-item"
-        (m/Column
-         .crossAxisAlignment m.CrossAxisAlignment/start
-         .children
-         [(m/Padding
-           .padding (m/EdgeInsets.only .top 4.0 .right 8.0)
-           .child (m/Text "• " .style (m/TextStyle .fontSize 18.0 .color onSurface)))
-          (render-selectable-text ctx text-content spans 
+          "heading-2"
+          (render-selectable-text ctx b-id text-content spans 
+                                  (.copyWith base-font .fontSize 22.0 .fontWeight m.FontWeight/bold) 
+                                  post-id)
+
+          "blockquote"
+          (m/Container
+           .padding (m/EdgeInsets.only .top 16.0)
+           .decoration (m/BoxDecoration .border (m/Border .top (m/BorderSide .color (.withOpacity tokens/primary-color 0.5) .width 4.0)))
+           .child (render-selectable-text ctx b-id text-content spans 
+                                          (.copyWith base-font .fontSize 16.0 .fontStyle m.FontStyle/italic .color tokens/text-secondary) 
+                                          post-id))
+
+          "list-item"
+          (m/Column
+           .crossAxisAlignment m.CrossAxisAlignment/start
+           .children
+           [(m/Padding
+             .padding (m/EdgeInsets.only .top 4.0 .right 8.0)
+             .child (m/Text "• " .style (m/TextStyle .fontSize 18.0 .color tokens/text-primary)))
+            (render-selectable-text ctx b-id text-content spans 
+                                    (.copyWith base-font .fontSize 16.0 .height 1.6) 
+                                    post-id)])
+
+          ;; Default Paragraph
+          (render-selectable-text ctx b-id text-content spans 
                                   (.copyWith base-font .fontSize 16.0 .height 1.6) 
-                                  post-id)])
-
-        ;; Default Paragraph
-        (render-selectable-text ctx text-content spans 
-                                (.copyWith base-font .fontSize 16.0 .height 1.6) 
-                                post-id)))))
+                                  post-id))))))

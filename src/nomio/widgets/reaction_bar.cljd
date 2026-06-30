@@ -1,6 +1,6 @@
 (ns nomio.widgets.reaction-bar
   "Interaction component: Handles commenting, liking, and bookmarking. 
-   Refactored for traditional Mongolian vertical layout and unbounded constraints."
+   Refactored for traditional Mongolian vertical layout and fully styled with Tenger Blue aesthetics."
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:mongol/mongol.dart" :as mgl]
@@ -8,7 +8,7 @@
    [nomio.core.api :as api]
    [nomio.core.state :as state]
    [components.toast :as toast]
-   [components.tokens :as tokens]))
+   [nomio.utils.tokens :as tokens]))
 
 (defn reaction-bar 
   "Post interaction widget.
@@ -27,8 +27,6 @@
     
     (f/widget
      :context ctx
-     :get {{{:flds [primary surface surfaceVariant onSurfaceVariant outlineVariant]} .-colorScheme
-            {:flds [bodyMedium]} .-textTheme} m/Theme}
      :watch [liked? !liked?
              like-loading? !like-loading?
              bookmarked? !bookmarked?
@@ -43,22 +41,24 @@
        ;; =====================================================================
        (m/InkWell
         .onTap on-comment-tap
-        .borderRadius (m/BorderRadius.circular 24.0)
+        .borderRadius (m/BorderRadius.circular 32.0)
         .child
         (m/Container
-         .padding (m/EdgeInsets.symmetric .vertical 20.0 .horizontal 12.0)
+         .padding (m/EdgeInsets.symmetric .vertical 24.0 .horizontal 16.0)
          .decoration (m/BoxDecoration
-                      .color surfaceVariant
-                      .borderRadius (m/BorderRadius.circular 24.0))
+                      .color tokens/surface-color
+                      .boxShadow tokens/tenger-shadow
+                      .border (m/Border.all .color (.withOpacity tokens/primary-color 0.1) .width 1.0)
+                      .borderRadius (m/BorderRadius.circular 32.0))
          .child (m/Column
                  .mainAxisSize m.MainAxisSize/min
                  .children
-                 [(m/Icon m.Icons/edit .size 20.0 .color onSurfaceVariant)
+                 [(m/Icon m.Icons/edit .size 20.0 .color tokens/primary-color)
                   (m/SizedBox .height 12.0)
                   (mgl/MongolText "Сэтгэгдэл үлдээх"  ; "Write comment"
-                                  .style (.copyWith bodyMedium 
-                                                    .fontFamily "OyunQaganTig" 
-                                                    .color onSurfaceVariant))])))
+                                  .style (m/TextStyle .fontSize 14.0 
+                                                      .fontFamily "OyunQaganTig" 
+                                                      .color tokens/text-primary))])))
 
        (m/SizedBox .width 16.0)
 
@@ -80,30 +80,34 @@
                                           (reset! !like-loading? false)
                                           (toast/error ctx "Алдаа гарлаа" :fade)))))))
                  nil)
-        .borderRadius (m/BorderRadius.circular 24.0)
+        .borderRadius (m/BorderRadius.circular 32.0)
         .child
         (m/Container
-         .padding (m/EdgeInsets.symmetric .vertical 20.0 .horizontal 12.0)
+         .padding (m/EdgeInsets.symmetric .vertical 24.0 .horizontal 16.0)
          .decoration (m/BoxDecoration
-                      .color (if liked? (.withOpacity primary 0.1) m.Colors/transparent)
-                      .border (m/Border.all .color (if liked? primary outlineVariant))
-                      .borderRadius (m/BorderRadius.circular 24.0))
+                      .color (if liked? tokens/primary-container tokens/surface-color)
+                      .boxShadow (if liked? nil tokens/tenger-shadow)
+                      .border (if liked? 
+                                (m/Border.all .color m.Colors/transparent .width 1.0)
+                                (m/Border.all .color (.withOpacity tokens/primary-color 0.1) .width 1.0))
+                      .borderRadius (m/BorderRadius.circular 32.0))
          .child (m/Column
                  .mainAxisSize m.MainAxisSize/min
                  .children
                  [(m/Icon (if liked? m.Icons/thumb_up_alt m.Icons/thumb_up_alt_outlined)
                           .size 20.0
-                          .color (if liked? primary onSurfaceVariant))
+                          .color (if liked? tokens/primary-color tokens/text-secondary))
                   (m/SizedBox .height 12.0)
                   (mgl/MongolText "Таалагдлаа"  ; "Like"
-                                  .style (.copyWith bodyMedium 
-                                                    .fontFamily "OyunQaganTig"
-                                                    .color (if liked? primary onSurfaceVariant)))])))
+                                  .style (m/TextStyle .fontSize 14.0 
+                                                      .fontFamily "OyunQaganTig"
+                                                      .fontWeight (if liked? m.FontWeight/bold m.FontWeight/normal)
+                                                      .color (if liked? tokens/primary-color tokens/text-secondary)))])))
 
        (m/SizedBox .width 16.0)
 
        ;; =====================================================================
-       ;; 3. Bookmark Button (NEW!)
+       ;; 3. Bookmark Button
        ;; =====================================================================
        (m/InkWell
         .onTap (fn []
@@ -117,31 +121,34 @@
                        (-> (api/toggle-bookmark post-id)
                            (.then (fn [_]
                                     (reset! !bookmark-loading? false)
-                                    ;; Optional: Show a toast when successfully bookmarked
                                     (if target-state
-                                      (toast/success ctx "Хадгаллаа" :fade) ; "Saved"
-                                      (toast/success ctx "Хадгалалтаас гаргалаа" :fade)))) ; "Unsaved"
+                                      (toast/success ctx "Хадгаллаа" :fade)
+                                      (toast/success ctx "Хадгалалтаас гаргалаа" :fade))))
                            (.catchError (fn [err]
                                           (reset! !bookmarked? (not target-state))
                                           (reset! !bookmark-loading? false)
                                           (toast/error ctx "Алдаа гарлаа" :fade)))))))
                  nil)
-        .borderRadius (m/BorderRadius.circular 24.0)
+        .borderRadius (m/BorderRadius.circular 32.0)
         .child
         (m/Container
-         .padding (m/EdgeInsets.symmetric .vertical 20.0 .horizontal 12.0)
+         .padding (m/EdgeInsets.symmetric .vertical 24.0 .horizontal 16.0)
          .decoration (m/BoxDecoration
-                      .color (if bookmarked? (.withOpacity primary 0.1) m.Colors/transparent)
-                      .border (m/Border.all .color (if bookmarked? primary outlineVariant))
-                      .borderRadius (m/BorderRadius.circular 24.0))
+                      .color (if bookmarked? tokens/primary-container tokens/surface-color)
+                      .boxShadow (if bookmarked? nil tokens/tenger-shadow)
+                      .border (if bookmarked? 
+                                (m/Border.all .color m.Colors/transparent .width 1.0)
+                                (m/Border.all .color (.withOpacity tokens/primary-color 0.1) .width 1.0))
+                      .borderRadius (m/BorderRadius.circular 32.0))
          .child (m/Column
                  .mainAxisSize m.MainAxisSize/min
                  .children
                  [(m/Icon (if bookmarked? m.Icons/bookmark m.Icons/bookmark_border)
                           .size 20.0
-                          .color (if bookmarked? primary onSurfaceVariant))
+                          .color (if bookmarked? tokens/primary-color tokens/text-secondary))
                   (m/SizedBox .height 12.0)
                   (mgl/MongolText "Хадгалах"  ; "Save/Bookmark"
-                                  .style (.copyWith bodyMedium 
-                                                    .fontFamily "OyunQaganTig"
-                                                    .color (if bookmarked? primary onSurfaceVariant)))])))]))))
+                                  .style (m/TextStyle .fontSize 14.0 
+                                                      .fontFamily "OyunQaganTig"
+                                                      .fontWeight (if bookmarked? m.FontWeight/bold m.FontWeight/normal)
+                                                      .color (if bookmarked? tokens/primary-color tokens/text-secondary)))])))]))))

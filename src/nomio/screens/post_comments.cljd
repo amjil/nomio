@@ -1,5 +1,6 @@
 (ns nomio.screens.post-comments
-  "Dedicated Comments Screen: A full-screen horizontal canvas for deep comment trees."
+  "Dedicated Comments Screen: A full-screen horizontal canvas for deep comment trees.
+   Fully upgraded to the Tenger Blue design system."
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:mongol/mongol.dart" :as mgl]
@@ -9,6 +10,7 @@
    [nomio.core.api :as api]
    [nomio.core.state :as state]
    [nomio.widgets.comment-tree :as comment-tree]
+   [nomio.utils.tokens :as tokens]
    [components.toast :as toast]))
 
 ;; =============================================================================
@@ -31,7 +33,6 @@
      .builder
      (fn [sheet-ctx]
        (f/widget
-        :get {{{:flds [surface primary outlineVariant onSurfaceVariant]} .-colorScheme} m/Theme}
         :watch [submitting? !submitting?]
 
         (m/Padding
@@ -40,9 +41,10 @@
          (m/Container
           .height 320.0
           .decoration (m/BoxDecoration
-                       .color surface
-                       .borderRadius (m/BorderRadius.vertical .top (m/Radius.circular 20.0)))
-          .padding (m/EdgeInsets.all 20.0)
+                       .color tokens/surface-color
+                       .borderRadius (m/BorderRadius.vertical .top (m/Radius.circular 24.0))
+                       .boxShadow tokens/tenger-shadow)
+          .padding (m/EdgeInsets.all 24.0)
           .child
           (m/Row
            .mainAxisSize m.MainAxisSize/max
@@ -52,9 +54,9 @@
              (if parent-comment
               (str (or parent-label "тодорхойгүй") "-д\nхариулах:") 
                "Сэтгэгдэл\nүлдээх:") 
-             .style (m/TextStyle .fontFamily "OyunQaganTig" .color onSurfaceVariant .fontWeight m.FontWeight/bold))
+             .style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-primary .fontWeight m.FontWeight/bold .fontSize 16.0))
 
-            (m/SizedBox .width 20.0)
+            (m/SizedBox .width 24.0)
 
             (m/Expanded
              .child
@@ -63,22 +65,27 @@
               .maxLines nil
               .expands true
               .textAlign mgl/MongolTextAlign.top
+              .style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-primary .fontSize 16.0)
               .decoration (m/InputDecoration
+                           .filled true
+                           .fillColor tokens/bg-color
+                           .contentPadding (m/EdgeInsets.all 16.0)
                            .hintText "Энд бичнэ үү..." 
-                           .hintStyle (m/TextStyle .fontFamily "OyunQaganTig")
-                           .border (m/OutlineInputBorder .borderRadius (m/BorderRadius.circular 12.0))
+                           .hintStyle (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-secondary)
+                           .border (m/OutlineInputBorder .borderRadius (m/BorderRadius.circular 16.0) .borderSide m.BorderSide/none)
                            .focusedBorder (m/OutlineInputBorder
-                                           .borderSide (m/BorderSide .color primary .width 2.0)
-                                           .borderRadius (m/BorderRadius.circular 12.0)))))
+                                           .borderSide (m/BorderSide .color tokens/primary-color .width 1.5)
+                                           .borderRadius (m/BorderRadius.circular 16.0)))))
 
             (m/SizedBox .width 20.0)
 
             (mgl/MongolElevatedButton
              .style (m/ElevatedButton.styleFrom
-                     .backgroundColor primary
+                     .backgroundColor tokens/primary-color
                      .foregroundColor m.Colors/white
-                     .padding (m/EdgeInsets.symmetric .vertical 24.0 .horizontal 8.0)
-                     .shape (m/RoundedRectangleBorder .borderRadius (m/BorderRadius.circular 28.0)))
+                     .elevation 0.0
+                     .padding (m/EdgeInsets.symmetric .vertical 32.0 .horizontal 12.0)
+                     .shape (m/RoundedRectangleBorder .borderRadius (m/BorderRadius.circular 20.0)))
              .onPressed
              (fn []
                (let [text (.-text ctrl)]
@@ -96,7 +103,7 @@
                                       (toast/error ctx (str "Алдаа гарлаа: " err))))))))
              .child (if @!submitting?
                       (m/SizedBox .width 20.0 .height 20.0 .child (m/CircularProgressIndicator .color m.Colors/white .strokeWidth 2.0))
-                      (mgl/MongolText "Илгээх" .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0))))]))))))))
+                      (mgl/MongolText "Илгээх" .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0 .fontWeight m.FontWeight/bold))))]))))))))
 
 ;; =============================================================================
 ;; Main Comments View
@@ -120,18 +127,18 @@
 
     (f/widget
      :context ctx
-     :get {{{:flds [surface onSurface onSurfaceVariant primary]} .-colorScheme} m/Theme}
      :watch [comments !comments
              loading? !loading?]
 
      (m/Scaffold
-      .backgroundColor surface
+      .backgroundColor tokens/bg-color
       .appBar
       (m/AppBar
        .elevation 0.0
-       .backgroundColor surface
-       .title (m/Text "Сэтгэгдэл" .style (m/TextStyle .fontFamily "OyunQaganTig" .color onSurface))
-       .leading (m/IconButton .icon (m/Icon m.Icons/arrow_back .color onSurface)
+       .backgroundColor m.Colors/transparent
+       .iconTheme (m/IconThemeData .color tokens/primary-color)
+       .title (m/Text "Сэтгэгдэл" .style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-primary .fontWeight m.FontWeight/bold))
+       .leading (m/IconButton .icon (m/Icon m.Icons/arrow_back .color tokens/primary-color)
                               .onPressed #(m/Navigator.pop ctx)))
       
       ;; Floating Action Button for adding a top-level comment
@@ -142,16 +149,19 @@
                       (show-reply-dialog! ctx post-id nil load-data!)
                       (m/Navigator.pushNamed ctx "/login"))
                     nil)
-       .backgroundColor primary
+       .backgroundColor tokens/primary-color
+       .foregroundColor m.Colors/white
+       .elevation 4.0
        .child (m/Icon m.Icons/add_comment .color m.Colors/white))
 
       .body
       (m/SafeArea
        .child
        (if loading?
-         (m/Center .child (m/CircularProgressIndicator))
+         (m/Center .child (m/CircularProgressIndicator .color tokens/primary-color))
          (m/ListView
           .scrollDirection m.Axis/horizontal
+          .physics (m/BouncingScrollPhysics.)
           .padding (m/EdgeInsets.only .left 24.0 .right 80.0 .top 20.0 .bottom 20.0)
           .children
           [(comment-tree/comment-tree
@@ -167,11 +177,14 @@
                            .builder
                            (fn [dialog-ctx]
                              (m/AlertDialog
-                              .title (m/Text "Сэтгэгдэл устгах" .style (m/TextStyle .fontFamily "OyunQaganTig"))
-                              .content (m/Text "Та энэ сэтгэгдлийг устгахдаа итгэлтэй байна уу?" .style (m/TextStyle .fontFamily "OyunQaganTig"))
+                              .backgroundColor tokens/surface-color
+                              .shape (m/RoundedRectangleBorder .borderRadius (m/BorderRadius.circular 20.0))
+                              .title (m/Text "Сэтгэгдэл устгах" .style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-primary .fontWeight m.FontWeight/bold))
+                              .content (m/Text "Та энэ сэтгэгдлийг устгахдаа итгэлтэй байна уу?" .style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-secondary .height 1.4))
                               .actions
                               [(m/TextButton 
-                                .onPressed #(m/Navigator.pop dialog-ctx) 
+                                .onPressed #(m/Navigator.pop dialog-ctx)
+                                .style (m/TextButton.styleFrom .foregroundColor tokens/text-secondary)
                                 .child (m/Text "Үгүй" .style (m/TextStyle .fontFamily "OyunQaganTig")))
                                (m/TextButton
                                 .onPressed (fn []
@@ -182,4 +195,5 @@
                                                           (load-data!)))
                                                  (.catchError (fn [err]
                                                                 (toast/error ctx (str "Алдаа: " err))))))
-                                .child (m/Text "Устгах" .style (m/TextStyle .fontFamily "OyunQaganTig" .color m.Colors/red)))]))))})])))))))
+                                .style (m/TextButton.styleFrom .foregroundColor tokens/srs-again)
+                                .child (m/Text "Устгах" .style (m/TextStyle .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold)))]))))})])))))))

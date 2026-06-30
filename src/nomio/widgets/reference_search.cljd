@@ -1,6 +1,7 @@
 (ns nomio.widgets.reference-search
   "A dedicated widget for searching and inserting post, block, or highlight references.
-   Supports 3 tabs: Posts, Blocks, and Highlights to allow full PKM resurfacing in the editor."
+   Supports 3 tabs: Posts, Blocks, and Highlights to allow full PKM resurfacing in the editor.
+   Fully styled with Tenger Blue design system."
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:mongol/mongol.dart" :as mgl]
@@ -10,6 +11,7 @@
    
    ;; Nomio business & network layer
    [nomio.core.api :as api]
+   [nomio.utils.tokens :as tokens]
    [components.toast :as toast]
    [nomio.utils.platform :as platform]
 
@@ -41,7 +43,7 @@
   [_sheet-ctx !target-editor-state captured-active-id modal-h]
   (let [!raw-results (atom [])
         !loading? (atom false)
-        ;; 🌟 Toggle between :post, :block, and :highlight
+        ;; Toggle between :post, :block, and :highlight
         !search-type (atom :post)
         
         do-search! 
@@ -54,9 +56,14 @@
                                 :highlight (api/fetch-highlights :limit 20))]
             (-> fetch-promise
                 (.then (fn [data]
-                         (reset! !raw-results (vec (or data [])))
-                         (reset! !loading? false)
-                         nil))
+                         (let [items (cond
+                                       (sequential? data) data
+                                       (and (map? data) (sequential? (:data data))) (:data data)
+                                       (and (map? data) (sequential? (get data "data"))) (get data "data")
+                                       :else [])]
+                           (reset! !raw-results (vec items))
+                           (reset! !loading? false)
+                           nil)))
                 (.catchError (fn [_]
                                (reset! !loading? false)
                                nil)))))]
@@ -66,9 +73,6 @@
      :managed [search-ctrl (m/TextEditingController.)
                search-focus-node (m/FocusNode.)]
                
-     :get {{{:flds [surface primary outlineVariant onSurfaceVariant surfaceVariant]} .-colorScheme
-            {:flds [titleMedium bodyMedium labelSmall]} .-textTheme} m/Theme}
-            
      :watch [results !raw-results
              loading? !loading?
              search-type !search-type
@@ -80,7 +84,7 @@
            
            main-content
            (m/Container
-            .color surface
+            .color tokens/bg-color
             .child
             (m/Row
              .children
@@ -88,11 +92,15 @@
               (m/Container
                .width 80.0
                .margin (m/EdgeInsets.only .left 16.0 .top 16.0 .bottom 16.0)
-               .decoration (m/BoxDecoration .color surfaceVariant .borderRadius (m/BorderRadius.circular 40.0))
+               .decoration (m/BoxDecoration 
+                            .color tokens/surface-color 
+                            .borderRadius (m/BorderRadius.circular 40.0)
+                            .boxShadow tokens/tenger-shadow
+                            .border (m/Border.all .color (.withOpacity tokens/primary-color 0.1) .width 1.0))
                .child
                (m/Column
                 .children
-                [(m/Padding .padding (m/EdgeInsets.only .top 24.0 .bottom 16.0) .child (m/Icon m.Icons/search .color primary))
+                [(m/Padding .padding (m/EdgeInsets.only .top 24.0 .bottom 16.0) .child (m/Icon m.Icons/search .color tokens/primary-color))
                  
                  (m/Expanded
                   .child
@@ -109,12 +117,12 @@
                      :on-submitted (fn [text] 
                                      (do-search! (str/trim text))
                                      nil)
-                     :style (m/TextStyle .fontFamily "OyunQaganTig" .color onSurfaceVariant)})))
+                     :style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-primary .fontSize 18.0)})))
                  
                  ;; Three tabs switcher (Post / Block / Highlight)
                  (m/Container
                   .padding (m/EdgeInsets.symmetric .vertical 16.0)
-                  .decoration (m/BoxDecoration .border (m/Border .top (m/BorderSide .color outlineVariant .width 0.5)))
+                  .decoration (m/BoxDecoration .border (m/Border .top (m/BorderSide .color (.withOpacity tokens/text-secondary 0.2) .width 1.0)))
                   .child
                   (m/Column
                    .mainAxisSize m.MainAxisSize/min
@@ -122,40 +130,41 @@
                    [(m/InkWell
                      .onTap (fn [] (reset! !search-type :post) (do-search! (.-text search-ctrl)) nil)
                      .child (m/Padding 
-                             .padding (m/EdgeInsets.symmetric .vertical 12.0 .horizontal 4.0)
+                             .padding (m/EdgeInsets.symmetric .vertical 16.0 .horizontal 8.0)
                              .child (mgl/MongolText "Нийтлэл"
-                                                    .style (.copyWith titleMedium .fontFamily "OyunQaganTig"
-                                                                      .fontWeight (if (= search-type :post) m.FontWeight/bold m.FontWeight/normal)
-                                                                      .color (if (= search-type :post) primary onSurfaceVariant)))))
+                                                    .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0
+                                                                        .fontWeight (if (= search-type :post) m.FontWeight/bold m.FontWeight/normal)
+                                                                        .color (if (= search-type :post) tokens/primary-color tokens/text-secondary)))))
                     (m/InkWell
                      .onTap (fn [] (reset! !search-type :block) (do-search! (.-text search-ctrl)) nil)
                      .child (m/Padding 
-                             .padding (m/EdgeInsets.symmetric .vertical 12.0 .horizontal 4.0)
+                             .padding (m/EdgeInsets.symmetric .vertical 16.0 .horizontal 8.0)
                              .child (mgl/MongolText "Хэсэг"
-                                                    .style (.copyWith titleMedium .fontFamily "OyunQaganTig"
-                                                                      .fontWeight (if (= search-type :block) m.FontWeight/bold m.FontWeight/normal)
-                                                                      .color (if (= search-type :block) primary onSurfaceVariant)))))
-                    ;; 🌟 NEW: Highlight category tab selection
+                                                    .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0
+                                                                        .fontWeight (if (= search-type :block) m.FontWeight/bold m.FontWeight/normal)
+                                                                        .color (if (= search-type :block) tokens/primary-color tokens/text-secondary)))))
+                    ;; Highlight category tab selection
                     (m/InkWell
                      .onTap (fn [] (reset! !search-type :highlight) (do-search! (.-text search-ctrl)) nil)
                      .child (m/Padding 
-                             .padding (m/EdgeInsets.symmetric .vertical 12.0 .horizontal 4.0)
+                             .padding (m/EdgeInsets.symmetric .vertical 16.0 .horizontal 8.0)
                              .child (mgl/MongolText "Эшлэл"
-                                                    .style (.copyWith titleMedium .fontFamily "OyunQaganTig"
-                                                                      .fontWeight (if (= search-type :highlight) m.FontWeight/bold m.FontWeight/normal)
-                                                                      .color (if (= search-type :highlight) primary onSurfaceVariant)))))]))]))
+                                                    .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0
+                                                                        .fontWeight (if (= search-type :highlight) m.FontWeight/bold m.FontWeight/normal)
+                                                                        .color (if (= search-type :highlight) tokens/primary-color tokens/text-secondary)))))]))]))
               
-              (m/SizedBox .width 24.0)
+              (m/SizedBox .width 32.0)
               
               ;; B. Horizontal Results Scroll View
               (m/Expanded
                .child
                (if loading?
-                 (m/Center .child (m/CircularProgressIndicator))
+                 (m/Center .child (m/CircularProgressIndicator .color tokens/primary-color))
                  (if (empty? results)
-                   (m/Center .child (mgl/MongolText "Илэрц алга" .style (m/TextStyle .color onSurfaceVariant .fontFamily "OyunQaganTig")))
+                   (m/Center .child (mgl/MongolText "Илэрц алга" .style (m/TextStyle .color tokens/text-secondary .fontFamily "OyunQaganTig" .fontSize 16.0)))
                    (m/ListView.builder
                     .scrollDirection m.Axis/horizontal
+                    .physics (m/BouncingScrollPhysics.)
                     .padding (m/EdgeInsets.only .top 16.0 .bottom 16.0 .right 32.0)
                     .itemCount (count results)
                     .itemBuilder
@@ -164,14 +173,14 @@
                             
                             ;; Dynamic parsing fields maps based on payload architecture
                             display-title (case search-type
-                                            :post      (get item "title" "Гарчиггүй")
-                                            :block     (get item "text" "Хоосон")
-                                            :highlight (get item "content" "Эшлэл хоосон"))
+                                            :post      (get item "title" (get item :title "Гарчиггүй"))
+                                            :block     (get item "text" (get item :text "Хоосон"))
+                                            :highlight (get item "content" (get item :content "Эшлэл хоосон")))
                                             
                             display-subtitle (case search-type
-                                               :post      (str "@" (get item "author_username" "user"))
-                                               :block     (str "Эх сурвалж: " (get item "post_title" ""))
-                                               :highlight (str "Тэмдэглэл: " (get item "note" "Байхгүй")))
+                                               :post      (str "@" (get item "author_username" (get item :author_username "user")))
+                                               :block     (str "Эх сурвалж: " (get item "post_title" (get item :post_title "")))
+                                               :highlight (str "Тэмдэглэл: " (get item "note" (get item :note "Байхгүй"))))
                                                
                             icon-data (case search-type
                                         :post      m.Icons/link
@@ -189,9 +198,9 @@
                                          
                                          ;; Construct custom reference payload structures for structural integration
                                          new-block (case search-type
-                                                     :post      {:id new-id :type :post-quote :data {:ref-post-id (get item "id")} :content display-title :content-spans [] :children []}
-                                                     :block     {:id new-id :type :block-ref :data {:ref-post-id (get item "post_id") :ref-block-id (get item "block_id")} :content display-title :content-spans [] :children []}
-                                                     :highlight {:id new-id :type :paragraph :data {:ref-highlight-id (get item "id")} :content (str "“" display-title "”") :content-spans [] :children []})
+                                                     :post      {:id new-id :type :post-quote :data {:ref-post-id (get item "id" (get item :id))} :content display-title :content-spans [] :children []}
+                                                     :block     {:id new-id :type :block-ref :data {:ref-post-id (get item "post_id" (get item :post_id)) :ref-block-id (get item "block_id" (get item :block_id))} :content display-title :content-spans [] :children []}
+                                                     :highlight {:id new-id :type :paragraph :data {:ref-highlight-id (get item "id" (get item :id))} :content (str "“" display-title "”") :content-spans [] :children []})
                                          
                                          empty-p {:id new-p-id :type :paragraph :content "" :content-spans [] :children []}]
                                      
@@ -213,32 +222,37 @@
                                      (toast/success local-ctx "Амжилттай холбогдлоо" :fade)
                                      (m/Navigator.pop local-ctx)
                                      nil))
-                          .borderRadius (m/BorderRadius.circular 12.0)
+                          .borderRadius (m/BorderRadius.circular 16.0)
                           .child
                           (m/Container
-                           .width 160.0
-                           .padding (m/EdgeInsets.all 16.0)
+                           .width 180.0
+                           .padding (m/EdgeInsets.all 24.0)
                            .decoration (m/BoxDecoration 
-                                        .color (if (= search-type :post) m.Colors/transparent (.withOpacity surfaceVariant 0.5))
-                                        .border (m/Border.all .color outlineVariant)
-                                        .borderRadius (m/BorderRadius.circular 12.0))
+                                        .color (if (= search-type :post) tokens/primary-container tokens/surface-color)
+                                        .border (if (= search-type :post) 
+                                                  (m/Border.all .color m.Colors/transparent .width 1.0)
+                                                  (m/Border.all .color (.withOpacity tokens/text-secondary 0.2) .width 1.0))
+                                        .borderRadius (m/BorderRadius.circular 16.0))
                            .child
                            (m/Column
                             .crossAxisAlignment m.CrossAxisAlignment/start
                             .children
-                            [(m/Icon icon-data .color primary .size 20.0)
-                             (m/SizedBox .width 16.0)
+                            [(m/Icon icon-data .color tokens/primary-color .size 24.0)
+                             (m/SizedBox .height 16.0)
                              (m/Expanded
                               .child
                               (mgl/MongolText display-title 
-                                              .style (.copyWith (if (= search-type :post) titleMedium bodyMedium) 
-                                                                .fontFamily "OyunQaganTig" 
-                                                                .fontWeight (if (= search-type :post) m.FontWeight/bold m.FontWeight/normal))
+                                              .style (m/TextStyle .fontSize (if (= search-type :post) 18.0 16.0) 
+                                                                  .color tokens/text-primary
+                                                                  .fontFamily "OyunQaganTig" 
+                                                                  .fontWeight (if (= search-type :post) m.FontWeight/bold m.FontWeight/normal))
                                               .maxLines 5 
                                               .overflow m.TextOverflow/ellipsis))
-                             (m/SizedBox .width 16.0)
+                             (m/SizedBox .height 16.0)
+                             (m/Divider .color (.withOpacity tokens/text-secondary 0.2))
+                             (m/SizedBox .height 16.0)
                              (mgl/MongolText display-subtitle
-                                             .style (.copyWith labelSmall .color onSurfaceVariant .fontFamily "OyunQaganTig"))]))))))))))]))]
+                                             .style (m/TextStyle .fontSize 13.0 .color tokens/text-secondary .fontFamily "OyunQaganTig"))]))))))))))]))]
      
      :bind {:info info}
      
@@ -246,10 +260,10 @@
       .height modal-h
       .child
       (m/ClipRRect
-       .borderRadius (m/BorderRadius.vertical .top (m/Radius.circular 20.0))
+       .borderRadius (m/BorderRadius.vertical .top (m/Radius.circular 24.0))
        .child
        (m/Scaffold
-        .backgroundColor surface
+        .backgroundColor tokens/bg-color
         .resizeToAvoidBottomInset false
         .body
         (if (platform/use-virtual-keyboard?)

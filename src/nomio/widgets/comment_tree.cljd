@@ -1,12 +1,13 @@
 (ns nomio.widgets.comment-tree
-  "Two-level flattened comment tree with @mentions for deep replies and clickable avatars for profile navigation."
+  "Two-level flattened comment tree with @mentions for deep replies and clickable avatars for profile navigation.
+   Fully styled with Tenger Blue aesthetics."
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:mongol/mongol.dart" :as mgl]
    [cljd.flutter :as f]
    [nomio.core.state :as state]
    [nomio.utils.time-format :as time-format]
-   [components.tokens :as tokens]))
+   [nomio.utils.tokens :as tokens]))
 
 ;; =============================================================================
 ;; 1. Helper: Recursively find all descendants and flatten them
@@ -40,9 +41,6 @@
   [comment reply-to-username on-reply on-delete is-child?]
   (f/widget
    :context ctx
-   :get {{{:flds [surfaceVariant onSurfaceVariant primary onSurface]} .-colorScheme
-          {:flds [bodyMedium labelSmall]} .-textTheme} m/Theme}
-   
    :let [user-id (get comment "user_id")
          nickname (get comment "nickname")
          username (get comment "username")
@@ -55,13 +53,13 @@
          time-str (time-format/format-relative (get comment "created_at"))]
    
    (m/Container
-    .margin (m/EdgeInsets.only .right (tokens/space :m))
-    .padding (m/EdgeInsets.all (tokens/space :m))
+    .margin (m/EdgeInsets.only .right 16.0)
+    .padding (m/EdgeInsets.all 16.0)
     .decoration (m/BoxDecoration
-                 .color (if is-child? 
-                          (-> surfaceVariant (.withOpacity 0.5)) 
-                          surfaceVariant)
-                 .borderRadius (m/BorderRadius.circular (tokens/radius :m)))
+                 ;; Root comments use surface color (white) with shadow, children use soft primary container
+                 .color (if is-child? tokens/primary-container tokens/surface-color)
+                 .boxShadow (if is-child? nil tokens/tenger-shadow)
+                 .borderRadius (m/BorderRadius.circular 16.0))
     .child
     (m/Row
      .mainAxisSize m.MainAxisSize/min
@@ -74,7 +72,7 @@
        .onTap (fn [] 
                 (m/Navigator.pushNamed ctx "/profile" .arguments {:id user-id})
                 nil) 
-       .borderRadius (m/BorderRadius.circular 8.0)
+       .borderRadius (m/BorderRadius.circular 12.0)
        .child
        (m/Padding
         .padding (m/EdgeInsets.all 4.0)
@@ -83,15 +81,15 @@
          .mainAxisSize m.MainAxisSize/min
          .crossAxisAlignment m.CrossAxisAlignment/center
          .children
-         [(m/Icon m.Icons/person_outline .size 20.0 .color primary)
+         [(m/Icon m.Icons/person_outline .size 24.0 .color tokens/primary-color)
           (m/SizedBox .height 8.0)
           (mgl/MongolText author-label
-                          .style (.copyWith labelSmall 
-                                            .color primary 
-                                            .fontFamily "OyunQaganTig"
-                                            .fontWeight m.FontWeight/bold))])))
+                          .style (m/TextStyle .fontSize 13.0 
+                                              .color tokens/primary-color 
+                                              .fontFamily "OyunQaganTig"
+                                              .fontWeight m.FontWeight/bold))])))
 
-      (m/SizedBox .width (tokens/space :m))
+      (m/SizedBox .width 20.0)
 
       ;; -----------------------------------------------------------------
       ;; B. Middle: Comment content with optional @mention
@@ -102,22 +100,22 @@
          (m/TextSpan
           .children
           [(m/TextSpan .text (str "@" reply-to-username " : ")
-                       .style (.copyWith bodyMedium 
-                                         .color primary 
-                                         .fontWeight m.FontWeight/bold 
-                                         .fontFamily "OyunQaganTig"))
+                       .style (m/TextStyle .fontSize 16.0 
+                                           .color tokens/primary-color 
+                                           .fontWeight m.FontWeight/bold 
+                                           .fontFamily "OyunQaganTig"))
            (m/TextSpan .text content
-                       .style (.copyWith bodyMedium 
-                                         .color onSurface 
-                                         .height 1.6 
-                                         .fontFamily "OyunQaganTig"))]))
+                       .style (m/TextStyle .fontSize 16.0 
+                                           .color tokens/text-primary 
+                                           .height 1.6 
+                                           .fontFamily "OyunQaganTig"))]))
         (mgl/MongolText content
-                        .style (.copyWith bodyMedium 
-                                          .color onSurface
-                                          .height 1.6
-                                          .fontFamily "OyunQaganTig")))
+                        .style (m/TextStyle .fontSize 16.0 
+                                            .color tokens/text-primary
+                                            .height 1.6
+                                            .fontFamily "OyunQaganTig")))
 
-      (m/SizedBox .width (tokens/space :m))
+      (m/SizedBox .width 20.0)
 
       ;; -----------------------------------------------------------------
       ;; C. Right side: Time, reply button, and optional delete button
@@ -127,39 +125,40 @@
        .crossAxisAlignment m.CrossAxisAlignment/center
        .children
        [(mgl/MongolText (or time-str "") 
-                        .style (.copyWith labelSmall 
-                                          .color onSurfaceVariant 
-                                          .fontFamily "OyunQaganTig"))
-        (m/SizedBox .height (tokens/space :l))
+                        .style (m/TextStyle .fontSize 12.0 
+                                            .color tokens/text-secondary 
+                                            .fontFamily "OyunQaganTig"))
+        (m/SizedBox .height 16.0)
         ;; Reply button
         (m/InkWell
          .onTap #(on-reply comment)
          .borderRadius (m/BorderRadius.circular 20.0)
          .child
          (m/Container
-          .padding (m/EdgeInsets.symmetric .vertical 12.0 .horizontal 4.0)
+          .padding (m/EdgeInsets.symmetric .vertical 14.0 .horizontal 8.0)
           .decoration (m/BoxDecoration
-                       .color (.withOpacity primary 0.1)
-                       .borderRadius (m/BorderRadius.circular 20.0))
+                       .color (.withOpacity tokens/primary-color 0.1)
+                       .borderRadius (m/BorderRadius.circular 12.0))
           .child
           (m/Column
            .mainAxisSize m.MainAxisSize/min
            .children
-           [(m/Icon m.Icons/reply .size 16.0 .color primary)
-            (m/SizedBox .height 6.0)
+           [(m/Icon m.Icons/reply .size 18.0 .color tokens/primary-color)
+            (m/SizedBox .height 8.0)
             (mgl/MongolText "Хариулах"
-                            .style (.copyWith labelSmall 
-                                              .color primary 
-                                              .fontFamily "OyunQaganTig"))])))
+                            .style (m/TextStyle .fontSize 13.0 
+                                                .color tokens/primary-color 
+                                                .fontFamily "OyunQaganTig"
+                                                .fontWeight m.FontWeight/bold))])))
         
         ;; Delete button (only for comment owner)
         (if (and on-delete
                  (= (get comment "user_id") (state/current-user-id)))
           (m/Padding
-           .padding (m/EdgeInsets.only .top 8.0)
+           .padding (m/EdgeInsets.only .top 12.0)
            .child
            (m/IconButton
-            .icon (m/Icon m.Icons/delete_outline .size 18.0 .color m.Colors/red)
+            .icon (m/Icon m.Icons/delete_outline .size 20.0 .color tokens/srs-again)
             .tooltip "Устгах"
             .onPressed #(on-delete (get comment "id"))))
           (m/SizedBox.shrink))])]))))
@@ -172,28 +171,29 @@
   "Two-level flattened comment tree. 
    Deep replies are visually flattened to the second level but include an @username mention text."
   [{:keys [comments on-reply on-delete]}]
-  (let [;; 🌟 Fast lookup map for finding parent usernames: {comment_id -> username}
-        id->username (into {}
+  (let [id->username (into {}
                            (map (juxt #(normalize-id (get % "id"))
                                       #(get % "username"))
                                 comments))
-        ;; Group all comments by their parent_id
         grouped-comments (group-by #(normalize-parent-id (get % "parent_id")) comments)
-        ;; Root comments are those with no parent (nil/0/"0")
         root-comments (get grouped-comments nil [])]
     
     (f/widget
      (if (empty? comments)
        (m/Center
-        .child (mgl/MongolText "Одоогоор сэтгэгдэл алга байна"
-                               .style (m/TextStyle .fontFamily "OyunQaganTig" .color m.Colors/grey)))
+        .child (m/Column
+                .mainAxisSize m.MainAxisSize/min
+                .children
+                [(m/Icon m.Icons/chat_bubble_outline .size 48.0 .color tokens/text-secondary)
+                 (m/SizedBox .height 16.0)
+                 (mgl/MongolText "Одоогоор сэтгэгдэл алга байна"
+                                 .style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-secondary .fontSize 16.0))]))
        
        (m/Row
         .crossAxisAlignment m.CrossAxisAlignment/start
         .children
         (mapv (fn [root]
                 (let [root-id (get root "id")
-                      ;; FLATTEN LOGIC: Find all descendants of this root and sort them chronologically by ID
                       flat-descendants (sort-by #(get % "id" 0)
                                                 (flatten-descendants (normalize-id root-id) grouped-comments))]
                   (m/Row
@@ -207,8 +207,8 @@
                       ;; 2. Render ALL descendants in a single flat level
                       (when (seq flat-descendants)
                         (m/Padding
-                         ;; Step down once for the 2nd level
-                         .padding (m/EdgeInsets.only .top 48.0 .right 8.0)
+                         ;; Step down once for the 2nd level to show hierarchy
+                         .padding (m/EdgeInsets.only .top 64.0 .right 16.0)
                          .child
                          (m/Row
                           .crossAxisAlignment m.CrossAxisAlignment/start

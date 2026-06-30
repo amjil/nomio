@@ -1,5 +1,5 @@
 (ns nomio.screens.explore
-  "Explore and Search screen. 
+  "Explore and Search screen updated with Tenger Blue aesthetics. 
    Features an AppBar with a back button, a vertical search bar, dynamic hot topics, 
    and full integration with the custom Mongolian Virtual Keyboard and Desktop IME.
    Uses a full-screen CustomScrollView for a native horizontal canvas experience."
@@ -10,6 +10,7 @@
    [cljd.flutter :as f]
    [nomio.core.api :as api]
    [nomio.widgets.post-card :as post-card]
+   [nomio.utils.tokens :as tokens]
    
    ;; Rich Editor & Custom TextField
    [rich-editor.components.text-field :as custom-tf]
@@ -48,8 +49,13 @@
                                             (api/search-posts query :page 1 :limit 10))]
                         (-> fetch-promise
                             (.then (fn [data]
-                                     (reset! !posts data)
-                                     (reset! !loading? false)))
+                                     (let [items (cond
+                                                   (sequential? data) data
+                                                   (and (map? data) (sequential? (:data data))) (:data data)
+                                                   (and (map? data) (sequential? (get data "data"))) (get data "data")
+                                                   :else [])]
+                                       (reset! !posts items)
+                                       (reset! !loading? false))))
                             (.catchError (fn [_]
                                            (reset! !posts [])
                                            (reset! !loading? false))))))
@@ -57,7 +63,12 @@
         load-tags! (fn []
                      (-> (api/fetch-hot-tags :limit 10)
                          (.then (fn [tags-data]
-                                  (let [tag-names (map #(get % "tag") (or tags-data []))]
+                                  (let [items (cond
+                                                (sequential? tags-data) tags-data
+                                                (and (map? tags-data) (sequential? (:data tags-data))) (:data tags-data)
+                                                (and (map? tags-data) (sequential? (get tags-data "data"))) (get tags-data "data")
+                                                :else [])
+                                        tag-names (map #(or (get % "tag") (get % :tag)) items)]
                                     (reset! !hot-tags (vec tag-names)))))
                          (.catchError (fn [_]
                                         (reset! !hot-tags [])))))]
@@ -69,8 +80,6 @@
      :context ctx
      :managed [search-ctrl (m/TextEditingController.)
                search-focus-node (m/FocusNode)]
-     :get {{{:flds [surface onSurface surfaceVariant outlineVariant primary]} .-colorScheme
-            {:flds [titleLarge titleMedium]} .-textTheme} m/Theme}
 
      :watch [posts !posts
              loading? !loading?
@@ -79,25 +88,24 @@
              search-state !search-state]
 
      (m/Scaffold
-      .backgroundColor surface
+      .backgroundColor tokens/bg-color
 
       .appBar
       (m/AppBar
        .elevation 0.0
-       .backgroundColor surface
+       .backgroundColor m.Colors/transparent
        .leading (m/IconButton
-                 .icon (m/Icon m.Icons/arrow_back .color onSurface)
-                 .tooltip "Буцах" ; "Back"
+                 .icon (m/Icon m.Icons/arrow_back .color tokens/primary-color)
+                 .tooltip "Буцах"
                  .onPressed #(m/Navigator.pop ctx)))
 
       .body
       (m/SafeArea
        .child
-       (let [;; 🌟 1. Main Content: Refactored to CustomScrollView for full-page horizontal scrolling
-             main-content
+       (let [main-content
              (m/CustomScrollView
               .scrollDirection m.Axis/horizontal
-              .physics (m/BouncingScrollPhysics.) ; Adds iOS-style bounce, great for horizontal flows
+              .physics (m/BouncingScrollPhysics.)
               .slivers
               [;; ---------------------------------------------------------
                ;; Sliver A: Far Left Vertical Search Bar Area
@@ -105,22 +113,24 @@
                (m/SliverToBoxAdapter
                 .child
                 (m/Container
-                 .width 72.0
-                 .margin (m/EdgeInsets.only .left 16.0 .top 8.0 .bottom 16.0)
+                 .width 80.0
+                 .margin (m/EdgeInsets.only .left 16.0 .top 16.0 .bottom 24.0)
                  .decoration (m/BoxDecoration
-                              .color surfaceVariant
-                              .borderRadius (m/BorderRadius.circular 36.0))
+                              .color tokens/surface-color
+                              .boxShadow tokens/tenger-shadow
+                              .border (m/Border.all .color (.withOpacity tokens/primary-color 0.1) .width 1.0)
+                              .borderRadius (m/BorderRadius.circular 40.0))
                  .child
                  (m/Column
                   .children
                   [(m/Padding
-                    .padding (m/EdgeInsets.only .top 24.0 .bottom 16.0)
-                    .child (m/Icon m.Icons/search .color onSurface))
+                    .padding (m/EdgeInsets.only .top 32.0 .bottom 16.0)
+                    .child (m/Icon m.Icons/search .color tokens/primary-color .size 28.0))
 
                    (m/Expanded
                     .child
                     (m/Padding
-                     .padding (m/EdgeInsets.only .bottom 24.0)
+                     .padding (m/EdgeInsets.only .bottom 32.0)
                      .child
                      (custom-tf/text-field
                       !search-state
@@ -131,9 +141,9 @@
                        :on-submitted (fn [text]
                                        (let [clean-text (str/trim text)]
                                          (load-posts! clean-text)))
-                       :style (m/TextStyle .fontFamily "OyunQaganTig" .color onSurface)})))])))
+                       :style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-primary .fontSize 18.0)})))])))
 
-               (m/SliverToBoxAdapter .child (m/SizedBox .width 24.0))
+               (m/SliverToBoxAdapter .child (m/SizedBox .width 40.0))
 
                ;; ---------------------------------------------------------
                ;; Sliver B: Middle Trending Tags (Hot Topics)
@@ -147,13 +157,11 @@
                   .crossAxisAlignment m.CrossAxisAlignment/start
                   .children
                   [(mgl/MongolText "Түгээмэл сэдвүүд"
-                                   .style (.copyWith titleMedium
-                                                     .fontFamily "OyunQaganTig"
-                                                     .fontWeight m.FontWeight/bold))
+                                   .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 20.0 .fontWeight m.FontWeight/bold .color tokens/text-primary))
                    (m/SizedBox .height 24.0)
 
                    (if (empty? hot-tags)
-                     (m/SizedBox .height 100.0 .child (m/Center .child (m/CircularProgressIndicator .strokeWidth 2.0)))
+                     (m/SizedBox .height 100.0 .child (m/Center .child (m/CircularProgressIndicator .strokeWidth 2.0 .color tokens/primary-color)))
                      (m/Wrap
                       .direction m.Axis/vertical
                       .spacing 16.0
@@ -161,19 +169,17 @@
                       .children
                       (mapv (fn [tag]
                               (m/InkWell
-                               .onTap (fn []
-                                        (m/Navigator.pushNamed ctx "/topic" .arguments {:tag tag})
-                                        nil)
-                               .borderRadius (m/BorderRadius.circular 8.0)
+                               .onTap (fn [] (m/Navigator.pushNamed ctx "/topic" .arguments {:tag tag}) nil) 
+                               .borderRadius (m/BorderRadius.circular 12.0)
                                .child
                                (m/Container
-                                .padding (m/EdgeInsets.symmetric .horizontal 8.0 .vertical 12.0)
+                                .padding (m/EdgeInsets.symmetric .horizontal 12.0 .vertical 16.0)
                                 .decoration (m/BoxDecoration
-                                             .color (.withOpacity primary 0.1)
-                                             .borderRadius (m/BorderRadius.circular 8.0))
+                                             .color tokens/primary-container
+                                             .borderRadius (m/BorderRadius.circular 12.0))
                                 .child
                                 (mgl/MongolText (str "# " tag)
-                                                .style (m/TextStyle .fontFamily "OyunQaganTig" .color primary)))))
+                                                .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .fontWeight m.FontWeight/w600 .color tokens/primary-color)))))
                             hot-tags)))])))
 
                ;; ---------------------------------------------------------
@@ -182,8 +188,8 @@
                (m/SliverToBoxAdapter
                 .child
                 (m/Padding
-                 .padding (m/EdgeInsets.symmetric .horizontal 32.0 .vertical 16.0)
-                 .child (m/VerticalDivider .width 1.0 .color outlineVariant)))
+                 .padding (m/EdgeInsets.symmetric .horizontal 40.0 .vertical 24.0)
+                 .child (m/VerticalDivider .width 1.0 .color (.withOpacity tokens/text-secondary 0.2))))
 
                ;; ---------------------------------------------------------
                ;; Sliver D: Feed Title
@@ -197,9 +203,7 @@
                   (if (str/blank? current-query)
                     "Санал болгох"
                     (str "\"" current-query "\" хайлтын үр дүн"))
-                  .style (.copyWith titleMedium
-                                    .fontFamily "OyunQaganTig"
-                                    .fontWeight m.FontWeight/bold))))
+                  .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 20.0 .fontWeight m.FontWeight/bold .color tokens/text-primary))))
 
                ;; ---------------------------------------------------------
                ;; Sliver E: Feed Content (Loading / Empty / List)
@@ -207,33 +211,70 @@
                (if loading?
                  (m/SliverFillRemaining
                   .hasScrollBody false
-                  .child (m/Center .child (m/CircularProgressIndicator)))
+                  .child (m/Center .child (m/CircularProgressIndicator .color tokens/primary-color)))
 
                  (if (empty? posts)
                    (m/SliverFillRemaining
                     .hasScrollBody false
                     .child (m/Center
                             .child (mgl/MongolText "Илэрц олдсонгүй"
-                                                   .style (m/TextStyle .color m.Colors/grey .fontFamily "OyunQaganTig"))))
+                                                   .style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-secondary .fontSize 16.0))))
 
-                   ;; 🌟 Using SliverList for performance and seamless scrolling
                    (m/SliverList
                     .delegate
                     (m/SliverChildBuilderDelegate
                      (f/build [i]
                               (let [post (nth posts i)]
                                 (m/Padding
-                                 .padding (m/EdgeInsets.only .top 24.0 .right 16.0)
+                                 .padding (m/EdgeInsets.only .top 24.0 .right 20.0)
                                  .child
-                                 (post-card/post-card
-                                  {:post post
-                                   :on-tap #(m/Navigator.pushNamed ctx "/post" .arguments {:id (get post "id")})}))))
+                                 (m/SizedBox 
+                                  .width 180.0
+                                  .child
+                                  (m/Container
+                                   .decoration (m/BoxDecoration
+                                                .color tokens/surface-color
+                                                .borderRadius (m/BorderRadius.circular 20.0)
+                                                .boxShadow tokens/tenger-shadow
+                                                .border (m/Border.all .color (.withOpacity tokens/primary-color 0.1) .width 1.0))
+                                   .child
+                                   (m/Material
+                                    .color m.Colors/transparent
+                                    .child
+                                    (m/InkWell
+                                     .borderRadius (m/BorderRadius.circular 20.0)
+                                     .onTap (fn [] (m/Navigator.pushNamed ctx "/post" .arguments {:id (get post "id" (get post :id))}) nil) 
+                                     .child
+                                     (m/Padding
+                                      .padding (m/EdgeInsets.all 24.0)
+                                      .child
+                                      (m/Column
+                                       .crossAxisAlignment m.CrossAxisAlignment/start
+                                       .children
+                                       [;; Avatar & Nickname
+                                        (m/Row
+                                         .children
+                                         [(m/CircleAvatar
+                                           .radius 16.0
+                                           .backgroundColor tokens/primary-container
+                                           .child (m/Icon m.Icons/person .size 16.0 .color tokens/primary-color))
+                                          (m/SizedBox .width 12.0)
+                                          (m/Expanded
+                                           .child
+                                           (mgl/MongolText (get post "author_nickname" (get post :author_nickname "Зочин")) 
+                                                           .style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-primary .fontWeight m.FontWeight/bold)))])
+                                        
+                                        (m/SizedBox .height 20.0)
+                                        
+                                        ;; Title
+                                        (mgl/MongolText (get post "title" (get post :title "Гарчиггүй"))
+                                                        .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 18.0 .color tokens/text-primary .fontWeight m.FontWeight/w600 .height 1.4))])))))))))
                      .childCount (count posts)))))
 
                ;; End Padding
                (m/SliverToBoxAdapter .child (m/SizedBox .width 40.0))])]
 
-         ;; 🌟 2. Conditional Wrapper for Keyboard/IME based on Platform
+         ;; 2. Conditional Wrapper for Keyboard/IME based on Platform
          (if (editor/is-mobile?)
            (f/widget
             :let [info (merge options/keyboard-option {:keyboard/mongol-font-family "OyunQaganTig"

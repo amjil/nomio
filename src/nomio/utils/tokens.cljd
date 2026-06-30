@@ -57,16 +57,18 @@
                  .onSurfaceVariant text-secondary
                  .error srs-again
                  .background bg-color)
-   .cardTheme (m/CardTheme
+   ;; 🌟 FIX: Updated to CardThemeData to support Flutter 3.27+ Material API changes
+   .cardTheme (m/CardThemeData
                .color surface-color
                .elevation 0.0
                .shape card-shape)
-   .appBarTheme (m/AppBarTheme
+   ;; 🌟 FIX: Updated to AppBarThemeData to support Flutter 3.27+ Material API changes
+   .appBarTheme (m/AppBarThemeData
                  .backgroundColor m.Colors/transparent
                  .elevation 0.0
                  .centerTitle false
                  .iconTheme (m/IconThemeData .color primary-color)
-                 .titleTextStyle (m/TextStyle .color text-primary 
-                                              .fontFamily "OyunQaganTig" 
-                                              .fontSize 20.0 
+                 .titleTextStyle (m/TextStyle .color text-primary
+                                              .fontFamily "OyunQaganTig"
+                                              .fontSize 20.0
                                               .fontWeight m.FontWeight/bold))))

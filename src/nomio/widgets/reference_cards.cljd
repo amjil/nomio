@@ -1,42 +1,57 @@
 (ns nomio.widgets.reference-cards
-  "UI definitions for Reference and Backlink blocks within the editor."
+  "UI definitions for Reference and Backlink blocks within the editor.
+   Fully styled with Tenger Blue design system."
   (:require ["package:flutter/material.dart" :as m]
             ["package:mongol/mongol.dart" :as mgl]
-            [cljd.flutter :as f]))
+            [cljd.flutter :as f]
+            [nomio.utils.tokens :as tokens]))
 
 (defn- base-reference-card
-  "A template for all read-only interactive blocks in the editor."
+  "A template for all read-only interactive blocks in the editor.
+   Applies Tenger Blue styling based on the 'color' semantic flag and highlights when active."
   [{:keys [id !state content icon color label]}]
   (f/widget
    :context ctx
-   :get {{{:flds [primary onSurfaceVariant surfaceVariant outlineVariant]} .-colorScheme
-          {:flds [bodyMedium labelSmall]} .-textTheme} m/Theme}
    :watch [state !state]
    :let [is-active (= (:active-block-id state) id)]
    (m/Container
     .padding (m/EdgeInsets.all 16.0)
-    .decoration (m/BoxDecoration 
-                 .color (if (= color :primary) (.withOpacity primary 0.05) surfaceVariant)
-                 .border (m/Border.all .color (if is-active primary (if (= color :primary) (.withOpacity primary 0.3) outlineVariant)) 
+    .decoration (m/BoxDecoration
+                 ;; Primary background gets a very light tint, surface gets the airy gray
+                 .color (if (= color :primary) (.withOpacity tokens/primary-color 0.05) tokens/bg-color)
+                 ;; Active blocks get a bold 2px primary border
+                 .border (m/Border.all .color (if is-active
+                                                tokens/primary-color
+                                                (if (= color :primary)
+                                                  (.withOpacity tokens/primary-color 0.3)
+                                                  (.withOpacity tokens/text-secondary 0.2)))
                                        .width (if is-active 2.0 1.0))
-                 .borderRadius (m/BorderRadius.circular 12.0))
+                 .borderRadius (m/BorderRadius.circular 16.0))
     .child
     (m/Column
      .crossAxisAlignment m.CrossAxisAlignment/start
      .children
      [(m/Row
        .children
-       [(m/Icon icon .size 16.0 .color (if (= color :primary) primary onSurfaceVariant))
+       [(m/Icon icon .size 18.0 .color (if (= color :primary) tokens/primary-color tokens/text-secondary))
         (m/SizedBox .width 8.0)
-        (mgl/MongolText label .style (.copyWith labelSmall .fontFamily "OyunQaganTig" .color (if (= color :primary) primary onSurfaceVariant)))])
-      (m/SizedBox .width 12.0)
+        (mgl/MongolText label .style (m/TextStyle .fontSize 13.0
+                                                  .fontFamily "OyunQaganTig"
+                                                  .fontWeight m.FontWeight/bold
+                                                  .color (if (= color :primary) tokens/primary-color tokens/text-secondary)))])
+
+      ;; 🌟 FIX: Corrected from .width to .height to properly space elements vertically within the Column
+      (m/SizedBox .height 16.0)
+
       (m/Expanded
        .child
-       (mgl/MongolText (or content "Хоосон")
-                       .style (.copyWith bodyMedium .fontFamily "OyunQaganTig" 
-                                         .fontWeight (if (= color :primary) m.FontWeight/bold m.FontWeight/normal)
-                                         .color (if (= color :primary) primary onSurfaceVariant))
-                       .maxLines 5 
+       (mgl/MongolText (if (or (nil? content) (empty? content)) "Хоосон" content)
+                       .style (m/TextStyle .fontSize 15.0
+                                           .fontFamily "OyunQaganTig"
+                                           .fontWeight (if (= color :primary) m.FontWeight/bold m.FontWeight/normal)
+                                           .fontStyle (if (= color :surface) m.FontStyle/italic m.FontStyle/normal)
+                                           .color (if (= color :primary) tokens/primary-color tokens/text-secondary))
+                       .maxLines 5
                        .overflow m.TextOverflow/ellipsis))]))))
 
 (def nomio-custom-renderers
@@ -44,11 +59,11 @@
   {:post-quote (fn [id !state _root-index block _style _cfg]
                  (base-reference-card {:id id :!state !state :content (:content block)
                                        :icon m.Icons/link :color :primary :label "Нийтлэл"}))
-   
+
    :block-ref  (fn [id !state _root-index block _style _cfg]
                  (base-reference-card {:id id :!state !state :content (:content block)
                                        :icon m.Icons/format_quote :color :surface :label "Хэсэг"}))
-   
+
    :backlink   (fn [id !state _root-index block _style _cfg]
                  (base-reference-card {:id id :!state !state :content (:content block)
                                        :icon m.Icons/keyboard_return :color :surface :label "Иш татсан"}))})

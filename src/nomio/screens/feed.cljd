@@ -1,87 +1,18 @@
 (ns nomio.screens.feed
   "Home feed updated with Tenger Blue aesthetics.
    Horizontal scrolling cards optimized for vertical script.
-   Integrates auth interception, pagination, and daily review banner."
+   Integrates auth interception, pagination, and direct Highlights access."
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:mongol/mongol.dart" :as mgl]
+   ["dart:core" :as dc]
    [cljd.flutter :as f]
    [nomio.core.api :as api]
    [nomio.core.state :as state]
    [nomio.utils.responsive :as responsive]
    [nomio.utils.tokens :as tokens]
-   [nomio.widgets.review-banner :as review-banner]))
-
-;; =============================================================================
-;; UI Components: Post Card
-;; =============================================================================
-
-(defn- post-card 
-  "A lightweight, elegant post card floating on the Tenger Blue surface."
-  [ctx post]
-  (let [post-id (get post :id)
-        title (get post :title "Гарчиггүй")
-        author-nickname (get post :author_nickname "Зочин")
-        tags (get post :tags [])]
-    (m/Container
-     .margin (m/EdgeInsets.only .right 20.0 .bottom 24.0 .top 12.0)
-     .decoration (m/BoxDecoration
-                  .color tokens/surface-color
-                  .borderRadius (m/BorderRadius.circular 20.0)
-                  .boxShadow tokens/tenger-shadow
-                  .border (m/Border.all .color (.withOpacity tokens/primary-color 0.1) .width 1.0))
-     .child
-     (m/Material
-      .color m.Colors/transparent
-      .child
-      (m/InkWell
-       .borderRadius (m/BorderRadius.circular 20.0)
-       .onTap (fn [] 
-                (m/Navigator.pushNamed ctx "/post" .arguments {:id post-id})
-                nil) 
-       .child
-       (m/Padding
-        .padding (m/EdgeInsets.all 24.0)
-        .child
-        (m/Column
-         .crossAxisAlignment m.CrossAxisAlignment/start
-         .children
-         [;; Author Avatar & Name
-          (m/Row
-           .children
-           [(m/CircleAvatar
-             .radius 18.0
-             .backgroundColor tokens/primary-container
-             .child (m/Icon m.Icons/person .size 18.0 .color tokens/primary-color))
-            (m/SizedBox .width 12.0)
-            (m/Expanded
-             .child
-             (mgl/MongolText author-nickname 
-                             .style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-primary .fontWeight m.FontWeight/bold)))])
-          
-          (m/SizedBox .height 24.0)
-          
-          ;; Main Title
-          (mgl/MongolText title 
-                          .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 20.0 .color tokens/text-primary .fontWeight m.FontWeight/w600 .height 1.4))
-          
-          ;; Tags
-          (when-not (empty? tags)
-            (m/Padding
-             .padding (m/EdgeInsets.only .top 20.0)
-             .child
-             (m/Wrap
-              .spacing 8.0 .runSpacing 8.0
-              .children
-              (map (fn [tag]
-                     (m/Container
-                      .padding (m/EdgeInsets.symmetric .horizontal 12.0 .vertical 6.0)
-                      .decoration (m/BoxDecoration 
-                                   .color tokens/primary-container
-                                   .borderRadius (m/BorderRadius.circular 8.0))
-                      .child (mgl/MongolText (str "# " tag) 
-                                             .style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/primary-color .fontSize 12.0 .fontWeight m.FontWeight/w500))))
-                   tags))))])))))))
+   [nomio.widgets.review-banner :as review-banner]
+   [nomio.widgets.post-card :as post-card]))
 
 ;; =============================================================================
 ;; Main Feed Screen
@@ -105,9 +36,9 @@
             (-> (api/fetch-posts :page @!page :limit page-limit)
                 (.then (fn [res]
                          (let [items (cond
-                                       (sequential? res) res
-                                       (and (map? res) (sequential? (:data res))) (:data res)
-                                       (and (map? res) (sequential? (get res "data"))) (get res "data")
+                                       (dart/is? res dc/Iterable) (vec res)
+                                       (and (map? res) (dart/is? (:data res) dc/Iterable)) (vec (:data res))
+                                       (and (map? res) (dart/is? (get res "data") dc/Iterable)) (vec (get res "data"))
                                        :else [])]
                            (if is-refresh? (reset! !posts items) (swap! !posts concat items))
                            (if (< (count items) page-limit) (reset! !has-more? false) (swap! !page inc))
@@ -115,7 +46,7 @@
                 (.catchError (fn [e] 
                                (reset! !loading? false) 
                                (reset! !has-more? false)
-                               (dart:core/print (str "Feed error: " e)))))))]
+                               (dc/print (str "Feed error: " e)))))))]
 
     (load-posts! true)
 
@@ -126,7 +57,11 @@
                                                    (when (>= (.-pixels (.-position ctrl)) (- (.-maxScrollExtent (.-position ctrl)) 200))
                                                      (load-posts! false))))
                              ctrl)]
-     :watch [app-state state/!app-state posts !posts loading? !loading? has-more? !has-more?]
+     :watch [app-state state/!app-state 
+             posts !posts 
+             loading? !loading? 
+             has-more? !has-more?]
+     
      :let [logged-in? (some? (:current-user app-state))
            posts-count (count posts)
            
@@ -151,21 +86,29 @@
              (m/ListView.builder
               .controller scroll-ctrl
               .scrollDirection m.Axis/horizontal
+              .physics (m/BouncingScrollPhysics.)
               .padding (m/EdgeInsets.only .left 16.0 .top 16.0 .bottom 16.0)
-              ;; 🌟 Total items = posts + 1 banner + 1 loading spinner (if has-more?)
               .itemCount (+ posts-count (if has-more? 1 0) 1)
               .itemBuilder
               (fn [_ i]
                 (cond
-                  ;; Index 0: Review Banner
+                  ;; 🌟 FIX: Removed fixed width. Let the banner size itself!
                   (zero? i) 
-                  (m/SizedBox .width 300.0 .child (review-banner/review-banner))
+                  (review-banner/review-banner)
                   
-                  ;; Posts
                   (<= i posts-count) 
-                  (m/SizedBox .width 180.0 .child (post-card ctx (nth posts (dec i))))
+                  (let [post (nth posts (dec i))
+                        post-id (or (get post "id") (get post :id))]
+                    (m/Padding
+                     .padding (m/EdgeInsets.only .right 20.0)
+                     .child
+                     (m/SizedBox 
+                      .width 180.0 
+                      .child 
+                      (post-card/post-card 
+                       {:post post
+                        :on-tap #(m/Navigator.pushNamed ctx "/post" .arguments {:id post-id})}))))
                   
-                  ;; Pagination Spinner
                   :else 
                   (m/Container .width 100.0 .child (m/Center .child (m/CircularProgressIndicator .strokeWidth 2.0 .color tokens/primary-color)))))))]
 
@@ -174,28 +117,34 @@
        (m/Scaffold
         .backgroundColor tokens/bg-color
         .appBar (m/AppBar
+                 .elevation 0.0
+                 .backgroundColor m.Colors/transparent
                  .title (m/Text "Nomio" .style (m/TextStyle .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold .color tokens/text-primary))
                  .centerTitle false
-                 .actions [(m/IconButton .icon (m/Icon m.Icons/search) .tooltip "Хайх" .onPressed (fn [] (m/Navigator.pushNamed ctx "/explore") nil))
-                           (m/IconButton .icon (m/Icon m.Icons/refresh) .onPressed #(load-posts! true))
-                           (m/IconButton .icon (m/Icon (if logged-in? m.Icons/account_circle m.Icons/login)) .onPressed #(handle-auth-action! "/profile" nil))])
+                 .actions [(m/IconButton .icon (m/Icon m.Icons/search .color tokens/primary-color) .tooltip "Хайх" .onPressed (fn [] (m/Navigator.pushNamed ctx "/explore") nil))
+                           (m/IconButton .icon (m/Icon m.Icons/format_quote .color tokens/primary-color) .tooltip "Миний эшлэл" .onPressed #(handle-auth-action! "/profile" (fn [] (m/Navigator.pushNamed ctx "/profile" .arguments {:tab 2}))))
+                           (m/IconButton .icon (m/Icon m.Icons/refresh .color tokens/primary-color) .onPressed #(load-posts! true))
+                           (m/IconButton .icon (m/Icon (if logged-in? m.Icons/account_circle m.Icons/login) .color tokens/primary-color) .onPressed #(handle-auth-action! "/profile" nil))])
         
         .floatingActionButton (m/FloatingActionButton
                                .backgroundColor tokens/primary-color
                                .foregroundColor m.Colors/white
                                .elevation 4.0
                                .onPressed #(handle-auth-action! "/create" (fn [] (-> (m/Navigator.pushNamed ctx "/create") (.then (fn [_] (load-posts! true))))))
-                               .child (m/Icon m.Icons/add))
+                               .child (m/Icon m.Icons/add .color m.Colors/white))
         .body (m/SafeArea .child feed-list-view))
 
        :desktop
        (m/Scaffold
         .backgroundColor tokens/bg-color
         .appBar (m/AppBar
+                 .elevation 0.0
+                 .backgroundColor m.Colors/transparent
                  .title (m/Text "Nomio" .style (m/TextStyle .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold .color tokens/text-primary))
-                 .actions [(m/IconButton .icon (m/Icon m.Icons/search) .tooltip "Хайх" .onPressed (fn [] (m/Navigator.pushNamed ctx "/explore") nil))
-                           (m/IconButton .icon (m/Icon m.Icons/refresh) .onPressed #(load-posts! true))
-                           (m/IconButton .icon (m/Icon m.Icons/edit) .onPressed #(handle-auth-action! "/create" (fn [] (-> (m/Navigator.pushNamed ctx "/create") (.then (fn [_] (load-posts! true)))))))
-                           (m/IconButton .icon (m/Icon (if logged-in? m.Icons/account_circle m.Icons/login)) .onPressed #(handle-auth-action! "/profile" nil))
+                 .actions [(m/IconButton .icon (m/Icon m.Icons/search .color tokens/primary-color) .tooltip "Хайх" .onPressed (fn [] (m/Navigator.pushNamed ctx "/explore") nil))
+                           (m/IconButton .icon (m/Icon m.Icons/format_quote .color tokens/primary-color) .tooltip "Миний эшлэл" .onPressed #(handle-auth-action! "/profile" (fn [] (m/Navigator.pushNamed ctx "/profile" .arguments {:tab 2}))))
+                           (m/IconButton .icon (m/Icon m.Icons/refresh .color tokens/primary-color) .onPressed #(load-posts! true))
+                           (m/IconButton .icon (m/Icon m.Icons/edit .color tokens/primary-color) .onPressed #(handle-auth-action! "/create" (fn [] (-> (m/Navigator.pushNamed ctx "/create") (.then (fn [_] (load-posts! true)))))))
+                           (m/IconButton .icon (m/Icon (if logged-in? m.Icons/account_circle m.Icons/login) .color tokens/primary-color) .onPressed #(handle-auth-action! "/profile" nil))
                            (m/SizedBox .width 16.0)])
         .body (m/SafeArea .child feed-list-view))}))))

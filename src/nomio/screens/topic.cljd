@@ -1,18 +1,19 @@
 (ns nomio.screens.topic
   "Topic Screen: Displays a paginated horizontal list of posts belonging to a specific tag/topic.
-   The tag title is integrated as the first item in the horizontal scroll view."
+   Fully upgraded to Tenger Blue design system."
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:mongol/mongol.dart" :as mgl]
    [cljd.flutter :as f]
    [nomio.core.api :as api]
+   [nomio.utils.tokens :as tokens]
    [nomio.widgets.post-card :as post-card]))
 
 ;; =============================================================================
 ;; 1. Paginated Topic Posts List Component
 ;; =============================================================================
 
-(defn- topic-posts-list 
+(defn- topic-posts-list
   "Paginated horizontal list specifically for fetching posts by a topic tag.
    Includes all 4 safety shields for bulletproof pagination, and renders the tag as the first item."
   [tag]
@@ -20,15 +21,20 @@
         !page (atom 1)
         !has-more? (atom true)
         !loading? (atom false)
-        
-        load-next-page! 
+
+        load-next-page!
         (fn []
           (when (and (not @!loading?) @!has-more?)
             (reset! !loading? true)
-            (-> (api/search-posts tag :page @!page :limit 10) ;; 🌟 Replaced fetch-topic-posts with search-posts
+            (-> (api/search-posts tag :page @!page :limit 10)
                 (.then (fn [new-items]
-                         (let [safe-items (vec (or new-items []))]
-                           
+                         (let [items-list (cond
+                                            (sequential? new-items) new-items
+                                            (and (map? new-items) (sequential? (:data new-items))) (:data new-items)
+                                            (and (map? new-items) (sequential? (get new-items "data"))) (get new-items "data")
+                                            :else [])
+                               safe-items (vec items-list)]
+
                            ;; Shield 1: Short List Terminator
                            (when (< (count safe-items) 10)
                              (reset! !has-more? false))
@@ -38,8 +44,8 @@
                              (do
                                ;; Shield 2: Frontend Deduplication
                                (swap! !items (fn [existing]
-                                               (let [existing-ids (set (map #(get % "id") existing))
-                                                     unique-new (remove #(contains? existing-ids (get % "id")) safe-items)]
+                                               (let [existing-ids (set (map #(get % "id" (get % :id)) existing))
+                                                     unique-new (remove #(contains? existing-ids (get % "id" (get % :id))) safe-items)]
                                                  (if (empty? unique-new)
                                                    (do (reset! !has-more? false) existing)
                                                    (into existing unique-new)))))
@@ -48,42 +54,39 @@
                 (.catchError (fn [_err]
                                ;; Fail silently but reset loading state to prevent deadlocks
                                (reset! !loading? false))))))]
-    
+
     ;; Initial load of the first page before mounting
     (load-next-page!)
 
     (f/widget
      :context ctx
-     ;; Fetch theme variables for styling the embedded tag title
-     :get {{{:flds [primary]} .-colorScheme
-            {:flds [displaySmall]} .-textTheme} m/Theme}
-     
      :managed [scroll-ctrl
                (let [ctrl (m/ScrollController.)]
                  (.addListener ctrl
-                  (fn []
-                    (when (and (.-hasClients ctrl) (not @!loading?) @!has-more?)
-                      (let [pos (.-position ctrl)
-                            current-pixels (.-pixels pos)
-                            max-pixels (.-maxScrollExtent pos)]
-                        ;; Shield 3: Scroll Guard
-                        (when (and (> max-pixels 0) (>= current-pixels (- max-pixels 200)))
-                          (load-next-page!))))))
+                               (fn []
+                                 (when (and (.-hasClients ctrl) (not @!loading?) @!has-more?)
+                                   (let [pos (.-position ctrl)
+                                         current-pixels (.-pixels pos)
+                                         max-pixels (.-maxScrollExtent pos)]
+                                     ;; Shield 3: Scroll Guard
+                                     (when (and (> max-pixels 0) (>= current-pixels (- max-pixels 200)))
+                                       (load-next-page!))))))
                  ctrl)]
      :watch [items !items
              loading? !loading?
              has-more? !has-more?]
-     
+
      (if (and (empty? items) loading?)
-       (m/Center .child (m/CircularProgressIndicator))
-       
+       (m/Center .child (m/CircularProgressIndicator .color tokens/primary-color))
+
        (m/ListView.builder
         .controller scroll-ctrl
         .scrollDirection m.Axis/horizontal
-        .padding (m/EdgeInsets.all 20.0)
+        .physics (m/BouncingScrollPhysics.) ;; 🌟 Smooth iOS-style horizontal bounce
+        .padding (m/EdgeInsets.only .left 24.0 .right 8.0 .top 24.0 .bottom 32.0)
         ;; Total items: 1 (Tag Title) + Posts Count + 1 (Loading/Empty State)
-        .itemCount (if (empty? items) 
-                     2 
+        .itemCount (if (empty? items)
+                     2
                      (+ 1 (count items) (if has-more? 1 0)))
         .itemBuilder
         (fn [_ i]
@@ -93,13 +96,13 @@
             ;; ---------------------------------------------------------
             (= i 0)
             (m/Padding
-             .padding (m/EdgeInsets.only .right 32.0 .left 12.0)
+             .padding (m/EdgeInsets.only .right 40.0 .left 16.0)
              .child
              (mgl/MongolText (str "# " tag)
-                             .style (.copyWith displaySmall
-                                               .color primary
-                                               .fontWeight m.FontWeight/bold
-                                               .fontFamily "OyunQaganTig")))
+                             .style (m/TextStyle .fontSize 48.0
+                                                 .color tokens/primary-color
+                                                 .fontWeight m.FontWeight/bold
+                                                 .fontFamily "OyunQaganTig")))
 
             ;; ---------------------------------------------------------
             ;; Index 1 (if empty): Shield 4 - Safe Empty State next to the tag
@@ -108,7 +111,7 @@
             (m/Center
              .child
              (mgl/MongolText "Энэ сэдэвт нийтлэл алга"
-                             .style (m/TextStyle .color m.Colors/grey .fontFamily "OyunQaganTig")))
+                             .style (m/TextStyle .fontSize 16.0 .color tokens/text-secondary .fontFamily "OyunQaganTig")))
 
             ;; ---------------------------------------------------------
             ;; Middle Indices: Actual Post Cards
@@ -117,9 +120,12 @@
             (let [post (nth items (dec i))] ; Subtract 1 because index 0 is the tag
               (m/Padding
                .padding (m/EdgeInsets.only .right 16.0)
-               .child (post-card/post-card
-                       {:post post
-                        :on-tap #(m/Navigator.pushNamed ctx "/post" .arguments {:id (get post "id")})})))
+               .child (m/SizedBox
+                       .width 180.0
+                       .child
+                       (post-card/post-card
+                        {:post post
+                         :on-tap #(m/Navigator.pushNamed ctx "/post" .arguments {:id (get post "id" (get post :id))})}))))
 
             ;; ---------------------------------------------------------
             ;; Last Index: Pagination Loading Indicator
@@ -127,28 +133,26 @@
             :else
             (m/Container
              .width 100.0
-             .child (m/Center .child (m/CircularProgressIndicator .strokeWidth 2.0))))))))))
+             .child (m/Center .child (m/CircularProgressIndicator .strokeWidth 2.0 .color tokens/primary-color))))))))))
 
 ;; =============================================================================
 ;; 2. Main Screen: Topic (Tag) Screen
 ;; =============================================================================
 
-;; 🌟 FIX: Added args parameter to receive data from router.cljd
 (defn topic-screen [& [args]]
   (let [tag (if (map? args) (:tag args) "")]
     (f/widget
      :context ctx
-     :get {{{:flds [primary surface]} .-colorScheme} m/Theme}
-     
+
      (m/Scaffold
-      .backgroundColor surface
+      .backgroundColor tokens/bg-color
       .appBar
       (m/AppBar
        .elevation 0.0
-       .backgroundColor surface
-       .leading (m/IconButton .icon (m/Icon m.Icons/arrow_back .color primary) 
+       .backgroundColor m.Colors/transparent
+       .leading (m/IconButton .icon (m/Icon m.Icons/arrow_back .color tokens/primary-color)
                               .onPressed #(m/Navigator.pop ctx)))
-      
+
       .body
       (m/SafeArea
        .child
