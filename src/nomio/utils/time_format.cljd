@@ -18,8 +18,8 @@
       (let [;; Parse the ISO string and convert it to the local timezone
             date-time (.toLocal (dc/DateTime.parse iso-str))
             now (dc/DateTime.now)
-            ;; Calculate the time difference
-            diff (.difference now date-time)
+            ;; 🌟 FIX: Use .abs to safely handle negative diffs caused by server/client clock skew
+            diff (.abs (.difference now date-time))
             seconds (.-inSeconds diff)
             minutes (.-inMinutes diff)
             hours (.-inHours diff)
@@ -31,15 +31,15 @@
 
           ;; Within 1 hour -> X minutes ago (minut-un emün-e)
           (< minutes 60)
-          (str minutes " ᠮᠢᠨᠦ᠋ᠲ ᠤᠨ ᠡᠮᠦᠨ᠎ᠡ")
+          (str minutes " ᠮᠢᠨᠦ᠋ᠲ ᠤᠨ ᠡᠮᠦᠨ᠎ᠡ")
 
           ;; Within 24 hours -> X hours ago (čag-un emün-e)
           (< hours 24)
-          (str hours " ᠴᠠᠭ ᠤᠨ ᠡᠮᠦᠨ᠎ᠡ")
+          (str hours " ᠴᠠᠭ ᠤᠨ ᠡᠮᠦᠨ᠎ᠡ")
 
           ;; Within 7 days -> X days ago (edür-ün emün-e)
           (< days 7)
-          (str days " ᠡᠳᠦᠷ ᠦᠨ ᠡᠮᠦᠨ᠎ᠡ")
+          (str days " ᠡᠳᠦᠷ ᠦᠨ ᠡᠮᠦᠨ᠎ᠡ")
 
           ;; More than 7 days, display the exact date yyyy-MM-dd
           :else
@@ -49,8 +49,10 @@
                "-"
                (pad-zero (.-day date-time)))))
 
-      (catch Exception _
-        ;; Parsing failed (e.g., invalid format), return the original string to prevent crashes
+      ;; 🌟 FIX: Specifically catch Dart's FormatException to prevent UI crashes on bad backend data
+      (catch dc/FormatException _
+        iso-str)
+      (catch dc/Exception _
         iso-str))))
 
 (defn format-absolute
@@ -66,5 +68,7 @@
             h (pad-zero (.-hour date-time))
             m (pad-zero (.-minute date-time))]
         (str y "-" M "-" d " " h ":" m))
-      (catch Exception _
+      (catch dc/FormatException _
+        iso-str)
+      (catch dc/Exception _
         iso-str))))

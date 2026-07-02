@@ -15,11 +15,13 @@
 (defn- extract-preview
   "Extracts cover image and plain text summary from rich text blocks."
   [blocks]
-  (let [first-img (first (filter #(= (get % "type") "image") blocks))
+  (let [first-img (first (filter #(or (= (get % "type") "image") (= (get % :type) "image")) blocks))
         text-blocks (filter #(not= (get % "type") "image") blocks)
         ;; Extract the first 80 characters as a summary
-        preview-text (apply str (take 80 (apply str (map #(get % "text" (get % "content" "")) text-blocks))))]
-    {:image-url (or (get first-img "url") (get-in first-img ["data" "url"]))
+        preview-text (apply str (take 80 (apply str (map #(or (get % "text") (get % "content") "") text-blocks))))
+        
+        raw-img-url (or (get first-img "url") (get-in first-img ["data" "url"]))]
+    {:image-url (if (and raw-img-url (not (empty? raw-img-url))) raw-img-url nil)
      :content (if (empty? preview-text)
                 "Хоосон байна"
                 (str preview-text "..."))}))
@@ -66,16 +68,18 @@
   (f/widget
    :context ctx
 
-   :let [preview (extract-preview (get post "blocks" []))
-         title (get post "title" "Гарчиггүй")
-         tags (vec (or (get post "tags") []))
-         time-str (time-format/format-relative (get post "created_at"))
-         author-id (get post "author_id" "")
-         author-nickname (get post "author_nickname")
-         author-username (get post "author_username")
+   ;; 🌟 FIX: Safe access to block data for extraction
+   :let [blocks (or (get post "blocks") (get post :blocks) [])
+         preview (extract-preview blocks)
+         title (or (get post "title") (get post :title) "Гарчиггүй")
+         tags (vec (or (get post "tags") (get post :tags) []))
+         time-str (time-format/format-relative (or (get post "created_at") (get post "inserted_at") (get post :created_at)))
+         author-id (or (get post "author_id") (get post :author_id) "")
+         author-nickname (or (get post "author_nickname") (get post :author_nickname))
+         author-username (or (get post "author_username") (get post :author_username))
          author-label (cond
                         (and author-nickname author-username)
-                        (str author-nickname "\n@" author-username)
+                        (str author-nickname " @" author-username)
                         author-nickname author-nickname
                         author-username (str "@" author-username)
                         :else (str "Хэрэглэгч " author-id))]
@@ -102,7 +106,7 @@
         [;; ------------------------------------------
          ;; A. Top: Cover Image
          ;; ------------------------------------------
-         (if (and (:image-url preview) (not (empty? (:image-url preview))))
+         (if (:image-url preview)
            (m/AspectRatio
             .aspectRatio 4/3
             .child (m/Image.network (:image-url preview) .fit m.BoxFit/cover))
@@ -129,11 +133,16 @@
              (m/Padding
               .padding (m/EdgeInsets.only .right 12.0)
               .child
-              (mgl/MongolText title
-                              .style (m/TextStyle .fontSize 18.0
-                                                  .fontFamily "OyunQaganTig"
-                                                  .fontWeight m.FontWeight/bold
-                                                  .color tokens/text-primary)))
+              (m/SizedBox
+               .width 24.0 ;; Give the title a fixed width column to prevent pushing other content
+               .child
+               (mgl/MongolText title
+                               .style (m/TextStyle .fontSize 18.0
+                                                   .fontFamily "OyunQaganTig"
+                                                   .fontWeight m.FontWeight/bold
+                                                   .color tokens/text-primary)
+                               .maxLines 10
+                               .overflow m.TextOverflow/ellipsis)))
 
              ;; 2. Summary (Center, takes up remaining space)
              (m/Expanded
@@ -143,7 +152,7 @@
                                                   .fontFamily "OyunQaganTig"
                                                   .color tokens/text-secondary
                                                   .height 1.5)
-                              .maxLines 3
+                              .maxLines 5
                               .overflow m.TextOverflow/ellipsis))
 
              ;; 3. Topics / Tags
@@ -155,7 +164,7 @@
                  .mainAxisAlignment m.MainAxisAlignment/start
                  .children
                  (mapv #(render-tag ctx %) (take 2 tags))))
-               (m/SizedBox))
+               (m/SizedBox.shrink))
 
              ;; 4. Meta-information (Right-aligned, bottom-aligned)
              (m/Padding

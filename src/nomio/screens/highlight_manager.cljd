@@ -1,6 +1,6 @@
 (ns nomio.screens.highlight-manager
   "A dedicated screen for managing captured highlights, notes, and SRS statuses.
-   Updated to Tenger Blue design system with a horizontal scrolling flow optimized for vertical script."
+   Updated to Tenger Blue design system with a purely horizontal flow optimized for vertical script."
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:mongol/mongol.dart" :as mgl]
@@ -17,14 +17,20 @@
 
 (defn- highlight-card
   "Renders a single highlight item with swipe-up-to-delete and status toggles.
-   Accepts ctx from the parent widget to trigger toasts and modals."
+   Completely redesigned for Native Traditional Mongolian script (Left-to-Right sections)."
   [ctx item refresh-fn!]
-  (let [hl-id (get item :id)
-        srs-item (get item :srs_item)
-        srs-id (get srs-item :id)
-        status (get srs-item :status "new")
+  ;; 🌟 FIX 1: Robust String/Keyword key access for JSON interop
+  (let [hl-id (or (get item "id") (get item :id))
+        srs-item (or (get item "srs_item") (get item :srs_item) {})
+        srs-id (or (get srs-item "id") (get srs-item :id))
+        status (or (get srs-item "status") (get srs-item :status) "new")
+        note (or (get item "note") (get item :note) "")
+        content (or (get item "content") (get item :content) "Хоосон")
+        source-type (or (get item "source_type") (get item :source_type) "Одоогоор тодорхойгүй")
+        source-ref (or (get item "source_ref") (get item :source_ref))
+        
         suspended? (= status "suspended")
-        has-note? (not (empty? (get item :note)))
+        has-note? (not (empty? note))
         
         toggle-status!
         (fn []
@@ -48,7 +54,7 @@
     
     (m/Dismissible
      .key (m/Key. (str "hl-" hl-id))
-     ;; 🌟 FIX: Change dismiss direction to UP since the list is scrolling horizontally
+     ;; Dismiss direction UP aligns with horizontal scrolling
      .direction m.DismissDirection/up
      .background (m/Container
                   .decoration (m/BoxDecoration 
@@ -57,14 +63,13 @@
                   .margin (m/EdgeInsets.only .right 24.0 .bottom 16.0 .top 16.0)
                   .alignment m.Alignment/bottomCenter
                   .padding (m/EdgeInsets.only .bottom 32.0)
-                  ;; 🌟 FIXED: Changed m.Icons.delete_sweep to m.Icons/delete_sweep
                   .child (m/Icon m.Icons/delete_sweep .color m.Colors/white .size 32.0))
      .confirmDismiss (fn [_] (dc/Future.value true))
      .onDismissed (fn [_] (delete-item!))
      .child
      (m/Container
-      ;; 🌟 FIX: Fixed width for horizontal scrolling
-      .width 320.0
+      ;; 🌟 FIX 2: Dynamic Card Width - wider if it contains a personal note!
+      .width (if has-note? 480.0 320.0)
       .margin (m/EdgeInsets.only .right 24.0 .bottom 16.0 .top 16.0)
       .decoration (m/BoxDecoration
                    .color tokens/surface-color
@@ -78,74 +83,96 @@
        (m/InkWell
         .borderRadius (m/BorderRadius.circular 20.0)
         .onTap (fn []
-                 (capture/show-capture-dialog! 
-                  ctx
-                  (get item :content) 
-                  (get item :source_ref) 
-                  (get item :source_type)))
+                 (capture/show-capture-dialog! ctx content source-ref source-type))
         .child
         (m/Padding
          .padding (m/EdgeInsets.all 24.0)
          .child
-         (m/Column
+         
+         ;; 🌟 FIX 3: Internal Layout is now a Left-to-Right Row!
+         (m/Row
           .crossAxisAlignment m.CrossAxisAlignment/start
           .children
-          [;; Status & Source Header
-           (m/Row
+          [;; ==========================================
+           ;; 1. Status & Header (Far Left)
+           ;; ==========================================
+           (m/Column
             .mainAxisAlignment m.MainAxisAlignment/spaceBetween
+            .crossAxisAlignment m.CrossAxisAlignment/center
             .children
-            [(m/Row
+            [(m/Column
               .children
               [(m/Icon (if suspended? m.Icons/pause_circle_filled m.Icons/play_circle_fill) 
                        .color (if suspended? tokens/text-secondary tokens/srs-easy) 
-                       .size 16.0)
-               (m/SizedBox .width 8.0)
+                       .size 24.0)
+               (m/SizedBox .height 12.0)
                (mgl/MongolText (if suspended? "Түр зогссон" "Идэвхтэй") 
                                .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 13.0 .color tokens/text-secondary))])
-             (mgl/MongolText (get item :source_type "Одоогоор тодорхойгүй") 
+             (mgl/MongolText source-type 
                              .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 13.0 .color tokens/primary-color .fontWeight m.FontWeight/bold))])
            
-           (m/SizedBox .height 24.0)
+           (m/SizedBox .width 24.0)
            
-           ;; Highlight Content
+           ;; ==========================================
+           ;; 2. Highlight Content (Middle, Expanded)
+           ;; ==========================================
            (m/Expanded
+            .flex 3
             .child
-            (m/SingleChildScrollView
-             .scrollDirection m.Axis/horizontal
-             .physics (m/BouncingScrollPhysics.)
-             .child
-             (mgl/MongolText (get item :content "Хоосон")
-                             .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 18.0 .height 1.6 .color tokens/text-primary))))
+            (mgl/MongolText content
+                            .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 18.0 .height 1.6 .color tokens/text-primary)
+                            .maxLines 10
+                            .overflow m.TextOverflow/ellipsis))
            
-           ;; Note Area
-           (when has-note?
-             (m/Container
-              .margin (m/EdgeInsets.only .top 20.0)
-              .padding (m/EdgeInsets.all 16.0)
-              .decoration (m/BoxDecoration 
-                           .color tokens/primary-container 
-                           .borderRadius (m/BorderRadius.circular 12.0))
-              .child (m/Row
-                      .crossAxisAlignment m.CrossAxisAlignment/start
-                      .children
-                      [(m/Icon m.Icons/lightbulb_outline .color tokens/primary-color .size 18.0)
-                       (m/SizedBox .width 12.0)
-                       (m/Expanded
-                        .child (mgl/MongolText (get item :note "")
-                                               .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .color tokens/primary-color)))])))
+           ;; ==========================================
+           ;; 3. Note Area (Middle-Right)
+           ;; ==========================================
+           (if has-note?
+             (m/Expanded
+              .flex 2
+              .child
+              (m/Container
+               .margin (m/EdgeInsets.only .left 24.0)
+               .padding (m/EdgeInsets.all 16.0)
+               .decoration (m/BoxDecoration 
+                            .color tokens/primary-container 
+                            .borderRadius (m/BorderRadius.circular 16.0))
+               .child 
+               (m/Row
+                .crossAxisAlignment m.CrossAxisAlignment/start
+                .children
+                [(m/Icon m.Icons/lightbulb_outline .color tokens/primary-color .size 18.0)
+                 (m/SizedBox .width 12.0)
+                 (m/Expanded
+                  .child (mgl/MongolText note 
+                                         .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .color tokens/primary-color)))])))
+             (m/SizedBox.shrink))
            
-           (m/SizedBox .height 16.0)
-           (m/Divider .color (.withOpacity tokens/text-secondary 0.1))
+           (m/SizedBox .width 20.0)
+           (m/VerticalDivider .color (.withOpacity tokens/text-secondary 0.1))
+           (m/SizedBox .width 12.0)
            
-           ;; Action Buttons
-           (m/Row
+           ;; ==========================================
+           ;; 4. Action Buttons (Far Right)
+           ;; ==========================================
+           (m/Column
             .mainAxisAlignment m.MainAxisAlignment/end
             .children
-            [(m/TextButton.icon
-              .style (m/TextButton.styleFrom .foregroundColor tokens/text-secondary)
-              .icon (m/Icon (if suspended? m.Icons/play_arrow m.Icons/pause) .size 18.0)
-              .label (mgl/MongolText (if suspended? "Сэргээх" "Зогсоох") .style (m/TextStyle .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold))
-              .onPressed toggle-status!)])]))))))))
+            [(m/InkWell
+              .onTap toggle-status!
+              .borderRadius (m/BorderRadius.circular 8.0)
+              .child
+              (m/Padding
+               .padding (m/EdgeInsets.symmetric .vertical 16.0 .horizontal 8.0)
+               .child
+               (m/Column
+                .mainAxisSize m.MainAxisSize/min
+                .children
+                [(m/Icon (if suspended? m.Icons/play_arrow m.Icons/pause) .color tokens/text-secondary .size 20.0)
+                 (m/SizedBox .height 12.0)
+                 (mgl/MongolText (if suspended? "Сэргээх" "Зогсоох") 
+                                 .style (m/TextStyle .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold .color tokens/text-secondary))])))]
+           )]))))))))
 
 ;; =============================================================================
 ;; Main Screen Widget

@@ -54,8 +54,8 @@
      .title "Nomio"
      .debugShowCheckedModeBanner false
 
-     ;; 🌟 Apply the global Tenger Blue Theme from tokens
      .theme tokens/tenger-theme
+     .themeMode m.ThemeMode/dark
 
      ;; Routing Dispatch Center: Delegate all navigation rules to router.cljd
      .initialRoute "/"

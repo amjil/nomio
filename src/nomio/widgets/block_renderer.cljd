@@ -1,6 +1,6 @@
 (ns nomio.widgets.block-renderer
   "Read-only rich text block renderer: Parses backend JSON blocks into Flutter native Widgets.
-   Integrated with manual GestureDetectors to drive the MglSelectableText selection engine.
+   Completely redesigned for Native Traditional Mongolian script: Left-to-Right flow, vertical pills and borders.
    Fully styled with Tenger Blue aesthetics."
   (:require
    ["package:flutter/material.dart" :as m]
@@ -15,7 +15,7 @@
    [nomio.widgets.capture-modal :as capture]))
 
 ;; =============================================================================
-;; 1. Core Selection Utilities (Ported from node-view)
+;; 1. Core Selection Utilities
 ;; =============================================================================
 
 (defn- mgl-separator? 
@@ -59,25 +59,25 @@
     (if (or (empty? spans) (empty? text))
       [(m/TextSpan .text text .style base-style)]
       (loop [pos 0
-             rem-spans (sort-by #(get % "start") spans)
+             rem-spans (sort-by #(or (get % "start") (get % :start)) spans)
              acc []]
         (if (or (empty? rem-spans) (>= pos text-len))
           (if (< pos text-len)
             (conj acc (m/TextSpan .text (subs text pos) .style base-style))
             acc)
           (let [span (first rem-spans)
-                start (max pos (get span "start" 0))
-                end (min text-len (get span "end" 0))
-                attrs (get span "attrs" {})]
+                start (max pos (or (get span "start") (get span :start) 0))
+                end (min text-len (or (get span "end") (get span :end) 0))
+                attrs (or (get span "attrs") (get span :attrs) {})]
             (if (>= start end)
               (recur pos (rest rem-spans) acc)
               (let [acc (if (< pos start)
                           (conj acc (m/TextSpan .text (subs text pos start) .style base-style))
                           acc)
                     styled-font (cond-> base-style
-                                  (get attrs "bold")      (.copyWith .fontWeight m.FontWeight/bold)
-                                  (get attrs "italic")    (.copyWith .fontStyle m.FontStyle/italic)
-                                  (get attrs "underline") (.copyWith .decoration m.TextDecoration/underline))]
+                                  (or (get attrs "bold") (get attrs :bold))      (.copyWith .fontWeight m.FontWeight/bold)
+                                  (or (get attrs "italic") (get attrs :italic))    (.copyWith .fontStyle m.FontStyle/italic)
+                                  (or (get attrs "underline") (get attrs :underline)) (.copyWith .decoration m.TextDecoration/underline))]
                 (recur end 
                        (rest rem-spans)
                        (conj acc (m/TextSpan .text (subs text start end) .style styled-font)))))))))))
@@ -104,7 +104,6 @@
 ;; =============================================================================
 
 (defn- render-selectable-text 
-  "Wraps the dumb MglSelectableText in a GestureDetector to manually drive selection states."
   [ctx block-id text-content spans base-font post-id]
   (let [spans-array (build-text-spans text-content spans base-font)
         text-len (count text-content)
@@ -112,10 +111,11 @@
     
     (f/widget
      :context local-ctx
+     :key (m/ValueKey. (str "st-" block-id))
      :let [{:keys [text-key !overlay !menu-data !selection]} (get-block-context block-id)
            
            hide-menu! 
-           (fn []
+           (fn [_]
              (when-let [entry @!overlay]
                (.remove entry)
                (reset! !overlay nil))
@@ -128,6 +128,7 @@
                      global-pos (mgl-sel.MglSelectableText/getGlobalOffsetForCaret text-key start-offset)
                      selected-text (if (.-isValid sel) (.textInside sel text-content) "")]
                  
+                 ;; For vertical text, popping the menu to the right (+40.0) is native behavior
                  (reset! !menu-data {:dx (if global-pos (+ (.-dx global-pos) 40.0) 100.0)
                                      :dy (if global-pos (.-dy global-pos) 100.0)
                                      :text selected-text})
@@ -144,25 +145,26 @@
                                     .child
                                     (m/Material
                                      .elevation 8.0
-                                     .color tokens/text-primary
+                                     .color tokens/primary-color
                                      .borderRadius (m/BorderRadius.circular 12.0)
                                      .child
                                      (m/InkWell
                                       .onTap (fn []
-                                               (hide-menu!)
+                                               (hide-menu! nil)
                                                (reset! !selection nil)
                                                (when-not (empty? (:text data))
                                                  (on-highlight-fn (:text data))))
                                       .borderRadius (m/BorderRadius.circular 12.0)
                                       .child
+                                      ;; 🌟 FIX 1: The overlay menu is now a VERTICAL PILL (Column)
                                       (m/Padding
-                                       .padding (m/EdgeInsets.symmetric .horizontal 20.0 .vertical 16.0)
+                                       .padding (m/EdgeInsets.symmetric .horizontal 12.0 .vertical 20.0)
                                        .child
-                                       (m/Row
+                                       (m/Column
                                         .mainAxisSize m.MainAxisSize/min
                                         .children
                                         [(m/Icon m.Icons/edit_note .color m.Colors/white .size 20.0)
-                                         (m/SizedBox .width 12.0)
+                                         (m/SizedBox .height 12.0)
                                          (mgl/MongolText "Эшлэх"
                                                          .style (m/TextStyle .fontFamily "OyunQaganTig" 
                                                                              .color m.Colors/white 
@@ -171,6 +173,10 @@
                      (reset! !overlay entry)
                      (.insert (m/Overlay.of local-ctx) entry)))))
              nil)]
+
+     ;; Remove overlay when navigating away (back button, route pop, etc.)
+     :managed [_ nil
+               :dispose hide-menu!]
              
      :watch [current-sel !selection]
      
@@ -178,14 +184,12 @@
       .behavior m.HitTestBehavior/translucent
       .dragStartBehavior g/DragStartBehavior.down
       
-      ;; 1. Tap anywhere to clear the selection
       .onTapUp (fn [_] 
-                 (hide-menu!) 
+                 (hide-menu! nil) 
                  (reset! !selection nil))
       
-      ;; 2. Long press to select the current word
       .onLongPressStart (fn [^m/LongPressStartDetails details]
-                          (hide-menu!)
+                          (hide-menu! nil)
                           (let [offset (get-safe-offset text-key (.globalPosition details) text-len)
                                 [w-start w-end] (get-word-boundaries text-content offset)
                                 new-sel (m/TextSelection. .baseOffset w-start .extentOffset w-end)]
@@ -193,13 +197,11 @@
                             (if (not (.-isCollapsed new-sel))
                               (show-menu! new-sel))))
       
-      ;; 3. Start dragging
       .onPanStart (fn [^m/DragStartDetails details]
-                    (hide-menu!)
+                    (hide-menu! nil)
                     (let [offset (get-safe-offset text-key (.globalPosition details) text-len)]
                       (reset! !selection (m/TextSelection. .baseOffset offset .extentOffset offset))))
       
-      ;; 4. Update dragging
       .onPanUpdate (fn [^m/DragUpdateDetails details]
                      (when-let [sel @!selection]
                        (let [offset (get-safe-offset text-key (.globalPosition details) text-len)
@@ -207,33 +209,33 @@
                          (reset! !selection new-sel)
                          (if (not (.-isCollapsed new-sel))
                            (show-menu! new-sel)
-                           (hide-menu!)))))
+                           (hide-menu! nil)))))
 
       .child
       (mgl-sel/MglSelectableText
+       .key (m/ValueKey. (str "mst-" block-id))
        .textKey text-key
        .textSpan (m/TextSpan .children spans-array)
        .selection current-sel
-       .showStartHandle true
-       .showEndHandle true)))))
+       .showStartHandle (boolean (and current-sel (not (.-isCollapsed current-sel))))
+       .showEndHandle (boolean (and current-sel (not (.-isCollapsed current-sel)))))))))
 
 ;; =============================================================================
 ;; 4. Core: Block Renderer
 ;; =============================================================================
 
 (defn render-block 
-  "Renders the corresponding read-only Mongolian component based on the backend block dictionary.
-   Accepts post-id to tag captured highlights with their origin."
+  "Renders the corresponding read-only Mongolian component based on the backend block dictionary."
   [block post-id] 
   (let [b-id (or (get block "id") (get block :id) (str (hash block)))]
     (f/widget
      :context ctx
      :key (m/ValueKey. b-id)
      
-     :let [b-type (get block "type" "paragraph")
-           text-content (or (get block "text") (get block "content") "")
-           spans (or (get block "spans") (get block "content-spans") [])
-           image-url (or (get block "url") (get-in block ["data" "url"]) "")
+     :let [b-type (or (get block "type") (name (get block :type :paragraph)))
+           text-content (or (get block "text") (get block "content") (get block :content) "")
+           spans (or (get block "spans") (get block "content-spans") (get block :content-spans) [])
+           image-url (or (get block "url") (get-in block ["data" "url"]) (get-in block [:data :url]) "")
            
            raw-data-val (or (get block "data") (get block :data))
            raw-data (cond
@@ -274,7 +276,7 @@
                          .borderRadius (m/BorderRadius.circular 16.0))
             .child
             (m/Column
-             .crossAxisAlignment m.CrossAxisAlignment/start
+             .crossAxisAlignment m.CrossAxisAlignment/center
              .children
              [(m/Icon m.Icons/link .size 20.0 .color tokens/primary-color)
               (m/SizedBox .height 16.0)
@@ -304,7 +306,7 @@
                          .borderRadius (m/BorderRadius.circular 16.0))
             .child
             (m/Column
-             .crossAxisAlignment m.CrossAxisAlignment/start
+             .crossAxisAlignment m.CrossAxisAlignment/center
              .children
              [(m/Icon m.Icons/format_quote .size 20.0 .color tokens/text-secondary)
               (m/SizedBox .height 16.0)
@@ -333,14 +335,16 @@
                          .border (m/Border.all .color (.withOpacity tokens/primary-color 0.2))
                          .borderRadius (m/BorderRadius.circular 16.0))
             .child
+            ;; 🌟 FIX 2: Entire Backlink card is a Column to stack Icon, Title, and Body vertically
             (m/Column
-             .crossAxisAlignment m.CrossAxisAlignment/start
+             .crossAxisAlignment m.CrossAxisAlignment/center
              .children
-             [(m/Row
+             [(m/Column
+               .crossAxisAlignment m.CrossAxisAlignment/center
                .children
                [(m/Icon (if (= (get block "quote_type") "block") m.Icons/format_quote m.Icons/link)
                         .size 16.0 .color tokens/primary-color)
-                (m/SizedBox .width 8.0)
+                (m/SizedBox .height 8.0)
                 (mgl/MongolText "Иш татсан"
                                 .style (m/TextStyle .fontSize 13.0 .color tokens/primary-color .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold))])
               (m/SizedBox .height 16.0)
@@ -355,7 +359,8 @@
           (m/ClipRRect
            .borderRadius (m/BorderRadius.circular 16.0)
            .child (m/Image.network image-url 
-                                   .width 240.0 
+                                   .width 240.0
+                                   .height 320.0 ;; 🌟 Bound height to prevent infinite expansion in LTR flow
                                    .fit m.BoxFit/cover
                                    .loadingBuilder (fn [ctx child progress]
                                                      (if (nil? progress)
@@ -377,8 +382,9 @@
 
           "blockquote"
           (m/Container
-           .padding (m/EdgeInsets.only .top 16.0)
-           .decoration (m/BoxDecoration .border (m/Border .top (m/BorderSide .color (.withOpacity tokens/primary-color 0.5) .width 4.0)))
+           ;; 🌟 FIX 3: Left Border for Blockquotes (native for vertical LTR text)
+           .padding (m/EdgeInsets.only .left 16.0)
+           .decoration (m/BoxDecoration .border (m/Border .left (m/BorderSide .color (.withOpacity tokens/primary-color 0.5) .width 4.0)))
            .child (render-selectable-text ctx b-id text-content spans 
                                           (.copyWith base-font .fontSize 16.0 .fontStyle m.FontStyle/italic .color tokens/text-secondary) 
                                           post-id))
@@ -388,11 +394,14 @@
            .crossAxisAlignment m.CrossAxisAlignment/start
            .children
            [(m/Padding
-             .padding (m/EdgeInsets.only .top 4.0 .right 8.0)
+             ;; 🌟 FIX 4: Bullet point padding on the bottom, allowing text to flow downwards natively
+             .padding (m/EdgeInsets.only .bottom 8.0)
              .child (m/Text "• " .style (m/TextStyle .fontSize 18.0 .color tokens/text-primary)))
-            (render-selectable-text ctx b-id text-content spans 
-                                    (.copyWith base-font .fontSize 16.0 .height 1.6) 
-                                    post-id)])
+            (m/Expanded
+             .child
+             (render-selectable-text ctx b-id text-content spans 
+                                     (.copyWith base-font .fontSize 16.0 .height 1.6) 
+                                     post-id))])
 
           ;; Default Paragraph
           (render-selectable-text ctx b-id text-content spans 

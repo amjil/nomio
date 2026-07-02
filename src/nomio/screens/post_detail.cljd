@@ -209,14 +209,16 @@
                   (or (let [nickname (get post "author_nickname")
                             username (get post "author_username")]
                         (cond
-                          (and nickname username) (str nickname "\n@" username)
+                          (and nickname username) (str nickname " @" username)
                           nickname nickname
                           username (str "@" username)
                           :else nil))
                       (str "Хэрэглэгч " (or (get post "author_id") "тодорхойгүй")))
                   .style (m/TextStyle .fontSize 14.0 .fontFamily "OyunQaganTig" .color tokens/primary-color .fontWeight m.FontWeight/bold))
                  (m/SizedBox .height 8.0)
-                 (mgl/MongolText (or (time-format/format-relative (get post "created_at")) "")
+                 
+                 ;; 🌟 FIX: Safe access to the creation time string!
+                 (mgl/MongolText (or (time-format/format-relative (or (get post "created_at") (get post "inserted_at") (get post :created_at))) "")
                                  .style (m/TextStyle .fontSize 13.0 .fontFamily "OyunQaganTig" .color tokens/text-secondary))])))
 
              (m/SizedBox .width 32.0)

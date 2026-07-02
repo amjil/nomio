@@ -1,6 +1,7 @@
 (ns nomio.widgets.capture-modal
   "Modal for capturing highlights and adding notes.
-   Fixed the infinite height layout bug for MongolTextField.
+   Completely redesigned for Native Traditional Mongolian script: 
+   Flows Left-to-Right with vertical columns to prevent text clipping.
    Fully styled with Tenger Blue aesthetics."
   (:require
    ["package:flutter/material.dart" :as m]
@@ -16,7 +17,8 @@
 ;; =============================================================================
 
 (defn- capture-view 
-  "The internal view of the bottom sheet."
+  "The internal view of the bottom sheet. 
+   Uses a horizontal Row as the primary axis to respect Mongolian reading order."
   [ctx selected-text source-ref source-type]
   (let [!loading? (atom false)
         ctrl (m/TextEditingController.)]
@@ -25,7 +27,7 @@
      :watch [loading? !loading?]
      
      (m/Container
-      ;; Handle safe area and keyboard pop-up padding dynamically
+      ;; Dynamically pad the bottom when the system keyboard appears
       .padding (m/EdgeInsets.only
                 .left 24.0 .right 24.0 .top 24.0
                 .bottom (+ 24.0 (.-bottom (m/MediaQuery.viewInsetsOf local-ctx))))
@@ -33,97 +35,110 @@
                    .color tokens/bg-color
                    .borderRadius (m/BorderRadius.vertical .top (m/Radius.circular 24.0)))
       .child
-      (m/Column
-       .mainAxisSize m.MainAxisSize/min
-       .crossAxisAlignment m.CrossAxisAlignment/start
-       .children
-       [;; 1. Header
-        (m/Row
-         .mainAxisAlignment m.MainAxisAlignment/spaceBetween
-         .children
-         [(mgl/MongolText "Тэмдэглэл үлдээх"
-                          .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 20.0 .fontWeight m.FontWeight/bold .color tokens/text-primary))
-          (m/IconButton
-           .icon (m/Icon m.Icons/close .color tokens/text-secondary)
-           .onPressed #(m/Navigator.pop local-ctx))])
-
-        (m/SizedBox .height 24.0)
-
-        ;; 2. Horizontal Area for Quote and Input
-        ;; 🌟 CRITICAL FIX: Bound the height to prevent MongolTextField infinite height crash!
-        (m/SizedBox
-         .height 240.0 
-         .child
-         (m/Row
-          .crossAxisAlignment m.CrossAxisAlignment/start
+      (m/SizedBox
+       ;; 🌟 FIX: Explicitly bound the height so vertical elements can expand safely
+       .height 280.0 
+       .child
+       
+       ;; 🌟 CORE MONGOLIAN ADAPTATION: Main flow is now Left-to-Right (m/Row)
+       (m/Row
+        .crossAxisAlignment m.CrossAxisAlignment/start
+        .children
+        [;; ==========================================
+         ;; 1. Header Column (Far Left)
+         ;; ==========================================
+         (m/Column
+          .mainAxisAlignment m.MainAxisAlignment/spaceBetween
+          .crossAxisAlignment m.CrossAxisAlignment/center
           .children
-          [;; Left: The Quoted Text Display
-           (m/Container
-            .width 80.0
-            .padding (m/EdgeInsets.all 16.0)
-            .decoration (m/BoxDecoration
-                         .color (.withOpacity tokens/primary-color 0.05)
-                         .borderRadius (m/BorderRadius.circular 16.0)
-                         .border (m/Border.all .color (.withOpacity tokens/primary-color 0.2)))
-            .child
-            (mgl/MongolText selected-text
-                            .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .color tokens/primary-color .fontWeight m.FontWeight/w600)
-                            .maxLines 10
-                            .overflow m.TextOverflow/ellipsis))
-
-           (m/SizedBox .width 16.0)
-
-           ;; Right: The User Note Input
+          [(m/IconButton
+            .icon (m/Icon m/Icons.close .color tokens/text-secondary)
+            .onPressed #(m/Navigator.pop local-ctx))
+           
            (m/Expanded
             .child
-            (m/Container
-             .decoration (m/BoxDecoration
-                          .color tokens/surface-color
-                          .borderRadius (m/BorderRadius.circular 16.0)
-                          .border (m/Border.all .color (.withOpacity tokens/text-secondary 0.2)))
+            (m/Padding
+             .padding (m/EdgeInsets.only .top 12.0 .bottom 12.0)
              .child
-             (mgl/MongolTextField
-              .controller ctrl
-              .maxLines nil
-              .expands true
-              .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0 .color tokens/text-primary)
-              .decoration (m/InputDecoration
-                           .hintText "Өөрийн бодлоо энд бичнэ үү..."
-                           .hintStyle (m/TextStyle .color tokens/text-secondary .fontFamily "OyunQaganTig")
-                           .border m.InputBorder/none
-                           .contentPadding (m/EdgeInsets.all 16.0)))))]))
+             (mgl/MongolText "Тэмдэглэл үлдээх"
+                             .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 20.0 .fontWeight m.FontWeight/bold .color tokens/text-primary))))])
 
-        (m/SizedBox .height 32.0)
+         (m/SizedBox .width 24.0)
 
-        ;; 3. Submit Button
-        (m/SizedBox
-         .width dc/double.infinity
-         .height 52.0
-         .child
-         (m/ElevatedButton
-          .style (m/ElevatedButton.styleFrom
-                  .backgroundColor tokens/primary-color
-                  .elevation 0.0
-                  .shape (m/RoundedRectangleBorder .borderRadius (m/BorderRadius.circular 16.0)))
-          .onPressed (if loading?
-                       nil
-                       (fn []
-                         (reset! !loading? true)
-                         (-> (api/create-highlight {:content selected-text
-                                                    :source-type source-type
-                                                    :source-ref source-ref
-                                                    :note (.-text ctrl)
-                                                    ;; Automatically push this highlight to the spaced repetition system
-                                                    :enqueue-srs true})
-                             (.then (fn [_]
-                                      (toast/success local-ctx "Амжилттай хадгалагдлаа")
-                                      (m/Navigator.pop local-ctx)))
-                             (.catchError (fn [_]
-                                            (reset! !loading? false)
-                                            (toast/error local-ctx "Алдаа гарлаа. Дахин оролдоно уу."))))))
-          .child (if loading?
-                   (m/SizedBox .width 24.0 .height 24.0 .child (m/CircularProgressIndicator .color m.Colors/white .strokeWidth 2.0))
-                   (mgl/MongolText "Хадгалах" .style (m/TextStyle .fontFamily "OyunQaganTig" .color m.Colors/white .fontWeight m.FontWeight/bold .fontSize 16.0)))))])))))
+         ;; ==========================================
+         ;; 2. Quoted Text Display (Middle-Left)
+         ;; ==========================================
+         (m/Container
+          .width 80.0
+          .padding (m/EdgeInsets.all 16.0)
+          .decoration (m/BoxDecoration
+                       .color (.withOpacity tokens/primary-color 0.05)
+                       .borderRadius (m/BorderRadius.circular 16.0)
+                       .border (m/Border.all .color (.withOpacity tokens/primary-color 0.2)))
+          .child
+          (mgl/MongolText selected-text
+                          .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .color tokens/primary-color .fontWeight m.FontWeight/w600)
+                          .maxLines 10
+                          .overflow m.TextOverflow/ellipsis))
+
+         (m/SizedBox .width 16.0)
+
+         ;; ==========================================
+         ;; 3. User Note Input (Middle-Right, Expanded width)
+         ;; ==========================================
+         (m/Expanded
+          .child
+          (m/Container
+           .decoration (m/BoxDecoration
+                        .color tokens/surface-color
+                        .borderRadius (m/BorderRadius.circular 16.0)
+                        .border (m/Border.all .color (.withOpacity tokens/text-secondary 0.2)))
+           .child
+           (mgl/MongolTextField
+            .controller ctrl
+            .maxLines nil
+            .expands true
+            .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0 .color tokens/text-primary)
+            .decoration (m/InputDecoration
+                         .hintText "Өөрийн бодлоо энд бичнэ үү..."
+                         .hintStyle (m/TextStyle .color tokens/text-secondary .fontFamily "OyunQaganTig")
+                         .border m.InputBorder/none
+                         .contentPadding (m/EdgeInsets.all 16.0)))))
+
+         (m/SizedBox .width 24.0)
+
+         ;; ==========================================
+         ;; 4. Submit Button (Far Right, Tall Vertical Button)
+         ;; ==========================================
+         (m/SizedBox
+          ;; 🌟 FIX: Button is now narrow horizontally but expands vertically to fit Mongolian text!
+          .width 56.0
+          .height dc/double.infinity
+          .child
+          (m/ElevatedButton
+           .style (m/ElevatedButton.styleFrom
+                   .backgroundColor tokens/primary-color
+                   .elevation 0.0
+                   .padding (m/EdgeInsets.symmetric .vertical 24.0 .horizontal 0.0)
+                   .shape (m/RoundedRectangleBorder .borderRadius (m/BorderRadius.circular 16.0)))
+           .onPressed (if loading?
+                        nil
+                        (fn []
+                          (reset! !loading? true)
+                          (-> (api/create-highlight {:content selected-text
+                                                     :source-type source-type
+                                                     :source-ref source-ref
+                                                     :note (.-text ctrl)
+                                                     :enqueue-srs true})
+                              (.then (fn [_]
+                                       (toast/success local-ctx "Амжилттай хадгалагдлаа")
+                                       (m/Navigator.pop local-ctx)))
+                              (.catchError (fn [_]
+                                             (reset! !loading? false)
+                                             (toast/error local-ctx "Алдаа гарлаа. Дахин оролдоно уу."))))))
+           .child (if loading?
+                    (m/SizedBox .width 24.0 .height 24.0 .child (m/CircularProgressIndicator .color m.Colors/white .strokeWidth 2.0))
+                    (mgl/MongolText "Хадгалах" .style (m/TextStyle .fontFamily "OyunQaganTig" .color m.Colors/white .fontWeight m.FontWeight/bold .fontSize 16.0)))))]))))))
 
 ;; =============================================================================
 ;; Public API

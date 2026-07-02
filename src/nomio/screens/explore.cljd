@@ -15,6 +15,9 @@
    ;; Rich Editor & Custom TextField
    [rich-editor.components.text-field :as custom-tf]
    [rich-editor.components.editor :as editor]
+   [rich-editor.services.ime-service :as ime]
+   [rich-editor.commands.editor-commands :as editor-cmd]
+   [rich-editor.components.node-view :as node-view]
    
    ;; Virtual Keyboard & IME dependencies
    [virtual-keyboard.keyboard :as keyboard]
@@ -31,6 +34,23 @@
          :cursor-visible false
          :external-keyboard-delegate nil
          :history {:undo-stack [] :redo-stack [] :max-depth 100}}))
+
+;; 🌟 FIX 2: Added IME refresh tick for search bar candidate updates
+(defonce !explore-refresh-tick (atom 0))
+
+(defonce _init-callbacks
+  (do
+    (ime/set-merge-focus-callback! (fn [!s prev-id new-offset] (editor-cmd/focus-block !s prev-id new-offset)))
+    (ime/set-split-focus-callback! (fn [!s new-id _] (editor-cmd/focus-block !s new-id 0)))
+    (ime/set-after-update-callback! (fn [] (swap! !explore-refresh-tick inc)))
+    (ime/set-get-caret-offset-callback!
+     (fn [block-id]
+       (when-let [text-key (get @node-view/!block-text-keys block-id)]
+         (when-let [node-ctx (.-currentContext text-key)]
+           (try
+             (let [^m/RenderBox rb (.findRenderObject node-ctx)]
+               (.localToGlobal rb m.Offset/zero))
+             (catch Exception _ nil))))))))
 
 ;; =============================================================================
 ;; Main Screen
@@ -81,11 +101,13 @@
      :managed [search-ctrl (m/TextEditingController.)
                search-focus-node (m/FocusNode)]
 
+     ;; 🌟 Include the IME tick watcher here!
      :watch [posts !posts
              loading? !loading?
              current-query !current-query
              hot-tags !hot-tags
-             search-state !search-state]
+             search-state !search-state
+             tick !explore-refresh-tick]
 
      (m/Scaffold
       .backgroundColor tokens/bg-color
@@ -224,51 +246,18 @@
                     .delegate
                     (m/SliverChildBuilderDelegate
                      (f/build [i]
-                              (let [post (nth posts i)]
+                              (let [post (nth posts i)
+                                    post-id (or (get post "id") (get post :id))]
                                 (m/Padding
                                  .padding (m/EdgeInsets.only .top 24.0 .right 20.0)
                                  .child
+                                 ;; 🌟 FIX 1: Replaced ~40 lines of duplicate UI with the unified post-card component!
                                  (m/SizedBox 
                                   .width 180.0
                                   .child
-                                  (m/Container
-                                   .decoration (m/BoxDecoration
-                                                .color tokens/surface-color
-                                                .borderRadius (m/BorderRadius.circular 20.0)
-                                                .boxShadow tokens/tenger-shadow
-                                                .border (m/Border.all .color (.withOpacity tokens/primary-color 0.1) .width 1.0))
-                                   .child
-                                   (m/Material
-                                    .color m.Colors/transparent
-                                    .child
-                                    (m/InkWell
-                                     .borderRadius (m/BorderRadius.circular 20.0)
-                                     .onTap (fn [] (m/Navigator.pushNamed ctx "/post" .arguments {:id (get post "id" (get post :id))}) nil) 
-                                     .child
-                                     (m/Padding
-                                      .padding (m/EdgeInsets.all 24.0)
-                                      .child
-                                      (m/Column
-                                       .crossAxisAlignment m.CrossAxisAlignment/start
-                                       .children
-                                       [;; Avatar & Nickname
-                                        (m/Row
-                                         .children
-                                         [(m/CircleAvatar
-                                           .radius 16.0
-                                           .backgroundColor tokens/primary-container
-                                           .child (m/Icon m.Icons/person .size 16.0 .color tokens/primary-color))
-                                          (m/SizedBox .width 12.0)
-                                          (m/Expanded
-                                           .child
-                                           (mgl/MongolText (get post "author_nickname" (get post :author_nickname "Зочин")) 
-                                                           .style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-primary .fontWeight m.FontWeight/bold)))])
-                                        
-                                        (m/SizedBox .height 20.0)
-                                        
-                                        ;; Title
-                                        (mgl/MongolText (get post "title" (get post :title "Гарчиггүй"))
-                                                        .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 18.0 .color tokens/text-primary .fontWeight m.FontWeight/w600 .height 1.4))])))))))))
+                                  (post-card/post-card 
+                                   {:post post
+                                    :on-tap #(m/Navigator.pushNamed ctx "/post" .arguments {:id post-id})})))))
                      .childCount (count posts)))))
 
                ;; End Padding

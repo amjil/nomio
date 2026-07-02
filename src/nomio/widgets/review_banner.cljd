@@ -4,9 +4,20 @@
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:mongol/mongol.dart" :as mgl]
+   ["dart:core" :as dc]
    [cljd.flutter :as f]
    [nomio.core.api :as api]
    [nomio.utils.tokens :as tokens]))
+
+(defn- due-count-from-response
+  "Extracts due_count from the reviews/due API payload."
+  [res]
+  (or (get-in res ["meta" "due_count"])
+      (get-in res [:meta :due_count])
+      (let [data (or (get res "data") (:data res)
+                     (when (dart/is? res dc/Iterable) res))]
+        (when (dart/is? data dc/Iterable) (count (vec data))))
+      0))
 
 ;; =============================================================================
 ;; Widget Implementation
@@ -23,12 +34,9 @@
           (reset! !state {:loading? true :due-count (:due-count @!state) :error nil})
           (-> (api/fetch-due-reviews :limit 1)
               (.then (fn [res]
-                       (let [count-val (or (get-in res [:meta :due_count])
-                                           (get-in res ["meta" "due_count"])
-                                           (and (sequential? res) (count res))
-                                           (and (map? res) (sequential? (:data res)) (count (:data res)))
-                                           0)]
-                         (reset! !state {:loading? false :due-count count-val :error nil}))))
+                       (reset! !state {:loading? false
+                                       :due-count (due-count-from-response res)
+                                       :error nil})))
               (.catchError (fn [e]
                              (reset! !state {:loading? false :due-count 0 :error (str e)})))))]
     

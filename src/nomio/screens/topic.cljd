@@ -4,6 +4,7 @@
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:mongol/mongol.dart" :as mgl]
+   ["dart:core" :as dc]
    [cljd.flutter :as f]
    [nomio.core.api :as api]
    [nomio.utils.tokens :as tokens]
@@ -26,14 +27,15 @@
         (fn []
           (when (and (not @!loading?) @!has-more?)
             (reset! !loading? true)
-            (-> (api/search-posts tag :page @!page :limit 10)
+            ;; 🌟 FIX: Use the dedicated exact-match endpoint for tags, NOT the fuzzy search endpoint!
+            (-> (api/fetch-topic-posts tag :page @!page :limit 10)
                 (.then (fn [new-items]
                          (let [items-list (cond
-                                            (sequential? new-items) new-items
-                                            (and (map? new-items) (sequential? (:data new-items))) (:data new-items)
-                                            (and (map? new-items) (sequential? (get new-items "data"))) (get new-items "data")
+                                            (dart/is? new-items dc/Iterable) (vec new-items)
+                                            (and (map? new-items) (dart/is? (:data new-items) dc/Iterable)) (vec (:data new-items))
+                                            (and (map? new-items) (dart/is? (get new-items "data") dc/Iterable)) (vec (get new-items "data"))
                                             :else [])
-                               safe-items (vec items-list)]
+                               safe-items items-list]
 
                            ;; Shield 1: Short List Terminator
                            (when (< (count safe-items) 10)
@@ -140,7 +142,7 @@
 ;; =============================================================================
 
 (defn topic-screen [& [args]]
-  (let [tag (if (map? args) (:tag args) "")]
+  (let [tag (if (map? args) (or (:tag args) (get args "tag") "") "")]
     (f/widget
      :context ctx
 

@@ -18,14 +18,12 @@
 ;; Helper Functions: Headers & Response Handling
 ;; =============================================================================
 
-(defn- get-auth-headers
-  "Returns standard JSON headers, injecting the Bearer token from global state."
-  []
-  (let [base-headers {"Content-Type" "application/json"}
-        token (state/current-token)]
-    (if (not (str/blank? token))
-      (assoc base-headers "Authorization" (str "Bearer " token))
-      base-headers)))
+(defn- get-auth-headers []
+  (let [token (state/current-user-token)] ;; Or however you access your token state
+    (if (and token (not (empty? token)))
+      {"Content-Type" "application/json"
+       "Authorization" (str "Bearer " token)}
+      {"Content-Type" "application/json"})))
 
 (defn- parse-response
   "Parses the HTTP response. Returns the 'data' field or the raw map on success.
@@ -63,7 +61,7 @@
   "Authenticates a user via email and password."
   [payload]
   (let [uri (Uri/parse (str base-url "/auth/login"))
-        headers {"Content-Type" "application/json"}
+        headers {"Content-Type" "application/json" "Accept" "application/json"}
         api-payload {"email" (or (:email payload) (get payload "email"))
                      "password" (or (:password payload) (get payload "password"))}
         body (convert/jsonEncode api-payload)
@@ -74,7 +72,7 @@
   "Registers a new user account."
   [payload]
   (let [uri (Uri/parse (str base-url "/auth/register"))
-        headers {"Content-Type" "application/json"}
+        headers {"Content-Type" "application/json" "Accept" "application/json"}
         api-payload {"username" (or (:username payload)
                                     (get payload "username")
                                     (:handle payload)
@@ -117,8 +115,7 @@
     (parse-response resp)))
 
 (defn ^:async create-post
-  "Publishes a new post. Author identity is handled by Token on backend.
-   Backend will automatically parse 'blocks' for references (ref_post_id/ref_block_id)."
+  "Publishes a new post. Author identity is handled by Token on backend."
   [payload]
   (let [uri (Uri/parse (str base-url "/posts"))
         api-payload {"title" (or (:title payload) (get payload "title"))
@@ -171,13 +168,21 @@
         resp (await (http/get uri .headers (get-auth-headers)))]
     (parse-response resp)))
 
+
 (defn ^:async create-comment
   "Creates a new comment or reply. User ID extracted from Token by backend."
   [payload]
-  (let [uri (Uri/parse (str base-url "/comments"))
-        api-payload {"post_id" (or (:post-id payload) (get payload "post_id"))
-                     "content" (or (:content payload) (get payload "content"))
-                     "parent_id" (or (:parent-id payload) (get payload "parent_id"))}
+  (let [post-id (or (:post-id payload) (get payload "post_id"))
+        parent-id (or (:parent-id payload) (get payload "parent_id"))
+        
+        ;; 🌟 FIX 1: 恢复为你 Router 中真实存在的绝对路由
+        uri (Uri/parse (str base-url "/comments"))
+        
+        ;; 🌟 保持 FIX 2: 安全构造 Payload，只有 parent_id 存在时才传，避免后端 Ecto 崩溃
+        api-payload (cond-> {"post_id" post-id
+                             "content" (or (:content payload) (get payload "content"))}
+                      parent-id (assoc "parent_id" parent-id))
+                      
         body (convert/jsonEncode api-payload)
         resp (await (http/post uri .headers (get-auth-headers) .body body))]
     (parse-response resp)))
@@ -342,11 +347,32 @@
     (parse-response resp)))
 
 (defn ^:async fetch-due-reviews
-  "Fetches the queue of SRS items that are due for review today."
+  "Fetches the queue of SRS items that are due for review today.
+   Returns `{:data [...] :meta {:due_count N}}` so callers can read meta.due_count."
   [& {:keys [limit include-new] :or {limit 50 include-new true}}]
   (let [uri (Uri/parse (str base-url "/reviews/due?limit=" limit "&include_new=" include-new))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+        resp (await (http/get uri .headers (get-auth-headers)))
+        status (.-statusCode resp)
+        body-str (.-body resp)
+        json-data (try
+                    (if (str/blank? body-str) {} (convert/jsonDecode body-str))
+                    (catch Exception _ {}))]
+    (if (and (>= status 200) (< status 300))
+      {"data" (get json-data "data" [])
+       "meta" (get json-data "meta" {})}
+      (let [err-type (get json-data "error")
+            details (get json-data "details")
+            detail-str (when details
+                         (str/join "\n"
+                                   (for [k (.-keys details)]
+                                     (let [v (get details k)
+                                           err-val (if (coll? v) (first v) v)]
+                                       (str k ": " err-val)))))
+            error-msg (cond
+                        (not (str/blank? detail-str)) detail-str
+                        (not (str/blank? err-type)) err-type
+                        :else (str "API Error (" status ")"))]
+        (throw (Exception. error-msg))))))
 
 (defn ^:async enqueue-srs
   "Manually pushes an existing highlight into the Spaced Repetition System."
