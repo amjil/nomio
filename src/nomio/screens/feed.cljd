@@ -1,7 +1,8 @@
 (ns nomio.screens.feed
   "Home feed updated with Tenger Blue aesthetics.
    Horizontal scrolling cards optimized for vertical script.
-   Integrates auth interception, pagination, and direct Highlights access."
+   Integrates auth interception, pagination, and direct Highlights access.
+   Uses content-driven sizing for natural card widths."
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:mongol/mongol.dart" :as mgl]
@@ -92,7 +93,6 @@
               .itemBuilder
               (fn [_ i]
                 (cond
-                  ;; 🌟 FIX: Removed fixed width. Let the banner size itself!
                   (zero? i) 
                   (review-banner/review-banner)
                   
@@ -100,14 +100,12 @@
                   (let [post (nth posts (dec i))
                         post-id (or (get post "id") (get post :id))]
                     (m/Padding
-                     .padding (m/EdgeInsets.only .right 20.0)
+                     .padding (m/EdgeInsets.only .top 24.0 .right 20.0)
                      .child
-                     (m/SizedBox 
-                      .width 180.0 
-                      .child 
-                      (post-card/post-card 
-                       {:post post
-                        :on-tap #(m/Navigator.pushNamed ctx "/post" .arguments {:id post-id})}))))
+                     ;; 🌟 FIX: 去掉了 m/SizedBox 和 .width 180.0，让卡片宽度由内容自然撑开！
+                     (post-card/post-card 
+                      {:post post
+                       :on-tap #(m/Navigator.pushNamed ctx "/post" .arguments {:id post-id})})))
                   
                   :else 
                   (m/Container .width 100.0 .child (m/Center .child (m/CircularProgressIndicator .strokeWidth 2.0 .color tokens/primary-color)))))))]

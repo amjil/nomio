@@ -137,7 +137,6 @@
         display-date (if (>= (count created-at) 10) (subs created-at 0 10) created-at)
         has-note? (not (empty? note))]
     (m/Container
-     ;; 🌟 FIX: Removed fixed .width entirely!
      .margin (m/EdgeInsets.only .right 20.0 .bottom 24.0 .top 12.0)
      .decoration (m/BoxDecoration
                   .color tokens/surface-color
@@ -159,7 +158,7 @@
         .child
         (m/Row
          .crossAxisAlignment m.CrossAxisAlignment/start
-         .mainAxisSize m.MainAxisSize/min ;; 🌟 FIX: Content-driven sizing
+         .mainAxisSize m.MainAxisSize/min
          .children
          [;; 1. Metadata (Far Left)
           (m/Column
@@ -176,7 +175,6 @@
           (m/SizedBox .width 24.0)
 
           ;; 2. Highlight Content (Middle)
-          ;; 🌟 FIX: Removed m/Expanded so it naturally wraps horizontal layout based on content
           (mgl/MongolText content
                           .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0 .color tokens/text-primary .fontWeight m.FontWeight/bold .height 1.4)
                           .maxLines 10
@@ -194,11 +192,10 @@
              .child
              (m/Row
               .crossAxisAlignment m.CrossAxisAlignment/start
-              .mainAxisSize m.MainAxisSize/min ;; 🌟 FIX: Content-driven sizing
+              .mainAxisSize m.MainAxisSize/min
               .children
               [(m/Icon m.Icons/edit_note .size 16.0 .color tokens/text-secondary)
                (m/SizedBox .width 12.0)
-               ;; 🌟 FIX: Removed inner m/Expanded
                (mgl/MongolText note
                                .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .color tokens/text-secondary)
                                .maxLines 8
@@ -389,8 +386,9 @@
                        (if (= active-tab 2)
                          (highlight-card ctx item)
                          (let [post-id (or (get item "id") (get item :id))]
-                           (m/SizedBox 
-                            .width 180.0 
+                           ;; 🌟 FIX: Removed m/SizedBox .width 180.0, added Padding for gap!
+                           (m/Padding
+                            .padding (m/EdgeInsets.only .right 24.0)
                             .child 
                             (post-card/post-card 
                              {:post item

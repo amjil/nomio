@@ -1,7 +1,7 @@
 (ns nomio.screens.explore
   "Explore and Search screen updated with Tenger Blue aesthetics. 
    Features an AppBar with a back button, a vertical search bar, dynamic hot topics, 
-   and full integration with the custom Mongolian Virtual Keyboard and Desktop IME.
+   and full integration with the centralized Native Virtual Keyboard.
    Uses a full-screen CustomScrollView for a native horizontal canvas experience."
   (:require
    ["package:flutter/material.dart" :as m]
@@ -14,15 +14,9 @@
    
    ;; Rich Editor & Custom TextField
    [rich-editor.components.text-field :as custom-tf]
-   [rich-editor.components.editor :as editor]
-   [rich-editor.services.ime-service :as ime]
-   [rich-editor.commands.editor-commands :as editor-cmd]
-   [rich-editor.components.node-view :as node-view]
    
-   ;; Virtual Keyboard & IME dependencies
-   [virtual-keyboard.keyboard :as keyboard]
-   [virtual-keyboard.options :as options]
-   [shared-ime.overlay-view :as overlay]))
+   ;; 🌟 Centralized Keyboard Wrapper
+   [nomio.widgets.keyboard-wrapper :as kw]))
 
 ;; =============================================================================
 ;; Editor State for Search Bar
@@ -34,23 +28,6 @@
          :cursor-visible false
          :external-keyboard-delegate nil
          :history {:undo-stack [] :redo-stack [] :max-depth 100}}))
-
-;; 🌟 FIX 2: Added IME refresh tick for search bar candidate updates
-(defonce !explore-refresh-tick (atom 0))
-
-(defonce _init-callbacks
-  (do
-    (ime/set-merge-focus-callback! (fn [!s prev-id new-offset] (editor-cmd/focus-block !s prev-id new-offset)))
-    (ime/set-split-focus-callback! (fn [!s new-id _] (editor-cmd/focus-block !s new-id 0)))
-    (ime/set-after-update-callback! (fn [] (swap! !explore-refresh-tick inc)))
-    (ime/set-get-caret-offset-callback!
-     (fn [block-id]
-       (when-let [text-key (get @node-view/!block-text-keys block-id)]
-         (when-let [node-ctx (.-currentContext text-key)]
-           (try
-             (let [^m/RenderBox rb (.findRenderObject node-ctx)]
-               (.localToGlobal rb m.Offset/zero))
-             (catch Exception _ nil))))))))
 
 ;; =============================================================================
 ;; Main Screen
@@ -101,16 +78,16 @@
      :managed [search-ctrl (m/TextEditingController.)
                search-focus-node (m/FocusNode)]
 
-     ;; 🌟 Include the IME tick watcher here!
      :watch [posts !posts
              loading? !loading?
              current-query !current-query
              hot-tags !hot-tags
-             search-state !search-state
-             tick !explore-refresh-tick]
+             search-state !search-state] ;; Ensure text-field re-renders on state changes
 
      (m/Scaffold
       .backgroundColor tokens/bg-color
+      ;; Prevent mobile native keyboard from crushing our virtual one
+      .resizeToAvoidBottomInset false 
 
       .appBar
       (m/AppBar
@@ -124,163 +101,141 @@
       .body
       (m/SafeArea
        .child
-       (let [main-content
-             (m/CustomScrollView
-              .scrollDirection m.Axis/horizontal
-              .physics (m/BouncingScrollPhysics.)
-              .slivers
-              [;; ---------------------------------------------------------
-               ;; Sliver A: Far Left Vertical Search Bar Area
-               ;; ---------------------------------------------------------
-               (m/SliverToBoxAdapter
-                .child
-                (m/Container
-                 .width 80.0
-                 .margin (m/EdgeInsets.only .left 16.0 .top 16.0 .bottom 24.0)
-                 .decoration (m/BoxDecoration
-                              .color tokens/surface-color
-                              .boxShadow tokens/tenger-shadow
-                              .border (m/Border.all .color (.withOpacity tokens/primary-color 0.1) .width 1.0)
-                              .borderRadius (m/BorderRadius.circular 40.0))
-                 .child
-                 (m/Column
-                  .children
-                  [(m/Padding
-                    .padding (m/EdgeInsets.only .top 32.0 .bottom 16.0)
-                    .child (m/Icon m.Icons/search .color tokens/primary-color .size 28.0))
-
-                   (m/Expanded
-                    .child
-                    (m/Padding
-                     .padding (m/EdgeInsets.only .bottom 32.0)
-                     .child
-                     (custom-tf/text-field
-                      !search-state
-                      {:controller search-ctrl
-                       :focus-node search-focus-node
-                       :hint "Хайх..."
-                       :max-lines 1
-                       :on-submitted (fn [text]
-                                       (let [clean-text (str/trim text)]
-                                         (load-posts! clean-text)))
-                       :style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-primary .fontSize 18.0)})))])))
-
-               (m/SliverToBoxAdapter .child (m/SizedBox .width 40.0))
-
-               ;; ---------------------------------------------------------
-               ;; Sliver B: Middle Trending Tags (Hot Topics)
-               ;; ---------------------------------------------------------
-               (m/SliverToBoxAdapter
-                .child
-                (m/Padding
-                 .padding (m/EdgeInsets.only .top 24.0)
-                 .child
-                 (m/Column
-                  .crossAxisAlignment m.CrossAxisAlignment/start
-                  .children
-                  [(mgl/MongolText "Түгээмэл сэдвүүд"
-                                   .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 20.0 .fontWeight m.FontWeight/bold .color tokens/text-primary))
-                   (m/SizedBox .height 24.0)
-
-                   (if (empty? hot-tags)
-                     (m/SizedBox .height 100.0 .child (m/Center .child (m/CircularProgressIndicator .strokeWidth 2.0 .color tokens/primary-color)))
-                     (m/Wrap
-                      .direction m.Axis/vertical
-                      .spacing 16.0
-                      .runSpacing 16.0
-                      .children
-                      (mapv (fn [tag]
-                              (m/InkWell
-                               .onTap (fn [] (m/Navigator.pushNamed ctx "/topic" .arguments {:tag tag}) nil) 
-                               .borderRadius (m/BorderRadius.circular 12.0)
-                               .child
-                               (m/Container
-                                .padding (m/EdgeInsets.symmetric .horizontal 12.0 .vertical 16.0)
-                                .decoration (m/BoxDecoration
-                                             .color tokens/primary-container
-                                             .borderRadius (m/BorderRadius.circular 12.0))
-                                .child
-                                (mgl/MongolText (str "# " tag)
-                                                .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .fontWeight m.FontWeight/w600 .color tokens/primary-color)))))
-                            hot-tags)))])))
-
-               ;; ---------------------------------------------------------
-               ;; Sliver C: Divider
-               ;; ---------------------------------------------------------
-               (m/SliverToBoxAdapter
-                .child
-                (m/Padding
-                 .padding (m/EdgeInsets.symmetric .horizontal 40.0 .vertical 24.0)
-                 .child (m/VerticalDivider .width 1.0 .color (.withOpacity tokens/text-secondary 0.2))))
-
-               ;; ---------------------------------------------------------
-               ;; Sliver D: Feed Title
-               ;; ---------------------------------------------------------
-               (m/SliverToBoxAdapter
-                .child
-                (m/Padding
-                 .padding (m/EdgeInsets.only .top 24.0 .right 24.0)
-                 .child
-                 (mgl/MongolText
-                  (if (str/blank? current-query)
-                    "Санал болгох"
-                    (str "\"" current-query "\" хайлтын үр дүн"))
-                  .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 20.0 .fontWeight m.FontWeight/bold .color tokens/text-primary))))
-
-               ;; ---------------------------------------------------------
-               ;; Sliver E: Feed Content (Loading / Empty / List)
-               ;; ---------------------------------------------------------
-               (if loading?
-                 (m/SliverFillRemaining
-                  .hasScrollBody false
-                  .child (m/Center .child (m/CircularProgressIndicator .color tokens/primary-color)))
-
-                 (if (empty? posts)
-                   (m/SliverFillRemaining
-                    .hasScrollBody false
-                    .child (m/Center
-                            .child (mgl/MongolText "Илэрц олдсонгүй"
-                                                   .style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-secondary .fontSize 16.0))))
-
-                   (m/SliverList
-                    .delegate
-                    (m/SliverChildBuilderDelegate
-                     (f/build [i]
-                              (let [post (nth posts i)
-                                    post-id (or (get post "id") (get post :id))]
-                                (m/Padding
-                                 .padding (m/EdgeInsets.only .top 24.0 .right 20.0)
-                                 .child
-                                 ;; 🌟 FIX 1: Replaced ~40 lines of duplicate UI with the unified post-card component!
-                                 (m/SizedBox 
-                                  .width 180.0
-                                  .child
-                                  (post-card/post-card 
-                                   {:post post
-                                    :on-tap #(m/Navigator.pushNamed ctx "/post" .arguments {:id post-id})})))))
-                     .childCount (count posts)))))
-
-               ;; End Padding
-               (m/SliverToBoxAdapter .child (m/SizedBox .width 40.0))])]
-
-         ;; 2. Conditional Wrapper for Keyboard/IME based on Platform
-         (if (editor/is-mobile?)
-           (f/widget
-            :let [info (merge options/keyboard-option {:keyboard/mongol-font-family "OyunQaganTig"
-                                                       :keyboard/key-container-color m/Colors.grey.shade500
-                                                       :keyboard/font-size 16})]
-            :bind {:info info}
+       ;; 🌟 Wrapped seamlessly in our new centralized custom keyboard
+       (kw/with-virtual-keyboard
+        (m/CustomScrollView
+         .scrollDirection m.Axis/horizontal
+         .physics (m/BouncingScrollPhysics.)
+         .slivers
+         [;; ---------------------------------------------------------
+          ;; Sliver A: Far Left Vertical Search Bar Area
+          ;; ---------------------------------------------------------
+          (m/SliverToBoxAdapter
+           .child
+           (m/Container
+            .width 80.0
+            .margin (m/EdgeInsets.only .left 16.0 .top 16.0 .bottom 24.0)
+            .decoration (m/BoxDecoration
+                         .color tokens/surface-color
+                         .boxShadow tokens/tenger-shadow
+                         .border (m/Border.all .color (.withOpacity tokens/primary-color 0.1) .width 1.0)
+                         .borderRadius (m/BorderRadius.circular 40.0))
+            .child
             (m/Column
              .children
-             [(m/Expanded
+             [(m/Padding
+               .padding (m/EdgeInsets.only .top 32.0 .bottom 16.0)
+               .child (m/Icon m.Icons/search .color tokens/primary-color .size 28.0))
+
+              (m/Expanded
                .child
-               (m/Stack
-                .children
-                [main-content
-                 (keyboard/candidates nil)]))
+               (m/Padding
+                .padding (m/EdgeInsets.only .bottom 32.0)
+                .child
+                (custom-tf/text-field
+                 !search-state
+                 {:controller search-ctrl
+                  :focus-node search-focus-node
+                  :hint "Хайх..."
+                  :max-lines 1
+                  :on-submitted (fn [text]
+                                  (let [clean-text (str/trim text)]
+                                    (load-posts! clean-text)))
+                  :style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-primary .fontSize 18.0)})))])))
 
-              (keyboard/keyboard
-               {:custom-fns {}})]))
+          (m/SliverToBoxAdapter .child (m/SizedBox .width 40.0))
 
-           ;; Desktop IME Wrapper
-           (overlay/ime-global-wrapper main-content))))))))
+          ;; ---------------------------------------------------------
+          ;; Sliver B: Middle Trending Tags (Hot Topics)
+          ;; ---------------------------------------------------------
+          (m/SliverToBoxAdapter
+           .child
+           (m/Padding
+            .padding (m/EdgeInsets.only .top 24.0)
+            .child
+            (m/Column
+             .crossAxisAlignment m.CrossAxisAlignment/start
+             .children
+             [(mgl/MongolText "Түгээмэл сэдвүүд"
+                              .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 20.0 .fontWeight m.FontWeight/bold .color tokens/text-primary))
+              (m/SizedBox .height 24.0)
+
+              (if (empty? hot-tags)
+                (m/SizedBox .height 100.0 .child (m/Center .child (m/CircularProgressIndicator .strokeWidth 2.0 .color tokens/primary-color)))
+                (m/Wrap
+                 .direction m.Axis/vertical
+                 .spacing 16.0
+                 .runSpacing 16.0
+                 .children
+                 (mapv (fn [tag]
+                         (m/InkWell
+                          .onTap (fn [] (m/Navigator.pushNamed ctx "/topic" .arguments {:tag tag}) nil) 
+                          .borderRadius (m/BorderRadius.circular 12.0)
+                          .child
+                          (m/Container
+                           .padding (m/EdgeInsets.symmetric .horizontal 12.0 .vertical 16.0)
+                           .decoration (m/BoxDecoration
+                                        .color tokens/primary-container
+                                        .borderRadius (m/BorderRadius.circular 12.0))
+                           .child
+                           (mgl/MongolText (str "# " tag)
+                                           .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .fontWeight m.FontWeight/w600 .color tokens/primary-color)))))
+                       hot-tags)))])))
+
+          ;; ---------------------------------------------------------
+          ;; Sliver C: Divider
+          ;; ---------------------------------------------------------
+          (m/SliverToBoxAdapter
+           .child
+           (m/Padding
+            .padding (m/EdgeInsets.symmetric .horizontal 40.0 .vertical 24.0)
+            .child (m/VerticalDivider .width 1.0 .color (.withOpacity tokens/text-secondary 0.2))))
+
+          ;; ---------------------------------------------------------
+          ;; Sliver D: Feed Title
+          ;; ---------------------------------------------------------
+          (m/SliverToBoxAdapter
+           .child
+           (m/Padding
+            .padding (m/EdgeInsets.only .top 24.0 .right 24.0)
+            .child
+            (mgl/MongolText
+             (if (str/blank? current-query)
+               "Санал болгох"
+               (str "\"" current-query "\" хайлтын үр дүн"))
+             .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 20.0 .fontWeight m.FontWeight/bold .color tokens/text-primary))))
+
+          ;; ---------------------------------------------------------
+          ;; Sliver E: Feed Content (Loading / Empty / List)
+          ;; ---------------------------------------------------------
+          (if loading?
+            (m/SliverFillRemaining
+             .hasScrollBody false
+             .child (m/Center .child (m/CircularProgressIndicator .color tokens/primary-color)))
+
+            (if (empty? posts)
+              (m/SliverFillRemaining
+               .hasScrollBody false
+               .child (m/Center
+                       .child (mgl/MongolText "Илэрц олдсонгүй"
+                                              .style (m/TextStyle .fontFamily "OyunQaganTig" .color tokens/text-secondary .fontSize 16.0))))
+
+              (m/SliverList
+               .delegate
+               (m/SliverChildBuilderDelegate
+                (f/build [i]
+                         (let [post (nth posts i)
+                               post-id (or (get post "id") (get post :id))]
+                           (m/Padding
+                            .padding (m/EdgeInsets.only .top 24.0 .right 20.0)
+                            .child
+                            (m/SizedBox 
+                             .width 180.0
+                             .child
+                             (post-card/post-card 
+                              {:post post
+                               :on-tap #(m/Navigator.pushNamed ctx "/post" .arguments {:id post-id})})))))
+                .childCount (count posts)))))
+
+          ;; End Padding
+          (m/SliverToBoxAdapter .child (m/SizedBox .width 40.0))])))))))

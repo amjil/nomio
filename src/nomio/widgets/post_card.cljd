@@ -1,6 +1,7 @@
 (ns nomio.widgets.post-card
   "Post preview card component: Responsible for displaying the post's cover, title, summary, tags, and meta-information.
-   Fully styled with Tenger Blue design system for a modern, airy look."
+   Fully styled with Tenger Blue design system for a modern, airy look.
+   Upgraded to Content-Driven Sizing (IntrinsicWidth) for natural Mongolian LTR flow."
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:mongol/mongol.dart" :as mgl]
@@ -68,7 +69,6 @@
   (f/widget
    :context ctx
 
-   ;; 🌟 FIX: Safe access to block data for extraction
    :let [blocks (or (get post "blocks") (get post :blocks) [])
          preview (extract-preview blocks)
          title (or (get post "title") (get post :title) "Гарчиггүй")
@@ -100,98 +100,110 @@
       (m/InkWell
        .onTap on-tap
        .child
-       (m/Column
-        .crossAxisAlignment m.CrossAxisAlignment/start
-        .children
-        [;; ------------------------------------------
-         ;; A. Top: Cover Image
-         ;; ------------------------------------------
-         (if (:image-url preview)
-           (m/AspectRatio
-            .aspectRatio 4/3
-            .child (m/Image.network (:image-url preview) .fit m.BoxFit/cover))
+       ;; 🌟 FIX 1: Wrap in IntrinsicWidth to constrain the card to its natural content width
+       (m/IntrinsicWidth
+        .child
+        (m/Column
+         ;; 🌟 FIX 2: Stretch the cross axis so the Cover Image exactly matches the text width
+         .crossAxisAlignment m.CrossAxisAlignment/stretch
+         .children
+         [;; ------------------------------------------
+          ;; A. Top: Cover Image
+          ;; ------------------------------------------
+          (if (:image-url preview)
+            ;; We use a fixed height container instead of AspectRatio to avoid infinite width errors
+            (m/Container
+             .height 120.0
+             .child (m/Image.network (:image-url preview) .fit m.BoxFit/cover))
 
-           ;; Fallback placeholder image
-           (m/Container
-            .height 120.0
-            .width double/infinity
-            .color tokens/bg-color
-            .child (m/Icon m.Icons/article .color (.withOpacity tokens/text-secondary 0.3) .size 48.0)))
+            ;; Fallback placeholder image
+            (m/Container
+             .height 120.0
+             ;; 🌟 FIX 3: Removed `.width double/infinity`! IntrinsicWidth + stretch handles the width now.
+             .color tokens/bg-color
+             .child (m/Center .child (m/Icon m.Icons/article .color (.withOpacity tokens/text-secondary 0.3) .size 48.0))))
 
-         ;; ------------------------------------------
-         ;; B. Bottom: Text Area
-         ;; ------------------------------------------
-         (m/Expanded
-          .child
-          (m/Padding
-           .padding (m/EdgeInsets.all 16.0)
+          ;; ------------------------------------------
+          ;; B. Bottom: Text Area
+          ;; ------------------------------------------
+          (m/Expanded
            .child
-           (m/Row
-            .crossAxisAlignment m.CrossAxisAlignment/start
-            .children
-            [;; 1. Title (Left-aligned, first column)
-             (m/Padding
-              .padding (m/EdgeInsets.only .right 12.0)
-              .child
-              (m/SizedBox
-               .width 24.0 ;; Give the title a fixed width column to prevent pushing other content
-               .child
-               (mgl/MongolText title
-                               .style (m/TextStyle .fontSize 18.0
+           (m/Padding
+            .padding (m/EdgeInsets.all 16.0)
+            .child
+            ;; 🌟 FIX 4: Add a minimum width constraint so cards don't get extremely skinny
+            (m/Container
+             .constraints (m/BoxConstraints .minWidth 140.0)
+             .child
+             (m/Row
+              .crossAxisAlignment m.CrossAxisAlignment/start
+              ;; 🌟 FIX 5: mainAxisSize must be min to prevent Row from demanding infinite width
+              .mainAxisSize m.MainAxisSize/min
+              .children
+              [;; 1. Title
+               (m/Padding
+                .padding (m/EdgeInsets.only .right 12.0)
+                .child
+                (m/SizedBox
+                 .width 24.0 ;; Fixed width column for title
+                 .child
+                 (mgl/MongolText title
+                                 .style (m/TextStyle .fontSize 18.0
+                                                     .fontFamily "OyunQaganTig"
+                                                     .fontWeight m.FontWeight/bold
+                                                     .color tokens/text-primary)
+                                 .maxLines 10
+                                 .overflow m.TextOverflow/ellipsis)))
+
+               ;; 2. Summary
+               ;; 🌟 FIX 6: Removed `m/Expanded`! The MongolText will now naturally dictate its own width based on maxLines.
+               (mgl/MongolText (:content preview)
+                               .style (m/TextStyle .fontSize 14.0
                                                    .fontFamily "OyunQaganTig"
-                                                   .fontWeight m.FontWeight/bold
-                                                   .color tokens/text-primary)
-                               .maxLines 10
-                               .overflow m.TextOverflow/ellipsis)))
+                                                   .color tokens/text-secondary
+                                                   .height 1.5)
+                               .maxLines 5
+                               .overflow m.TextOverflow/ellipsis)
 
-             ;; 2. Summary (Center, takes up remaining space)
-             (m/Expanded
-              .child
-              (mgl/MongolText (:content preview)
-                              .style (m/TextStyle .fontSize 14.0
-                                                  .fontFamily "OyunQaganTig"
-                                                  .color tokens/text-secondary
-                                                  .height 1.5)
-                              .maxLines 5
-                              .overflow m.TextOverflow/ellipsis))
+               ;; 3. Topics / Tags
+               (if (seq tags)
+                 (m/Padding
+                  .padding (m/EdgeInsets.only .left 12.0)
+                  .child
+                  (m/Column
+                   .mainAxisAlignment m.MainAxisAlignment/start
+                   .mainAxisSize m.MainAxisSize/min ;; Keep column tight
+                   .children
+                   (mapv #(render-tag ctx %) (take 2 tags))))
+                 (m/SizedBox.shrink))
 
-             ;; 3. Topics / Tags
-             (if (seq tags)
+               ;; 4. Meta-information
                (m/Padding
                 .padding (m/EdgeInsets.only .left 12.0)
                 .child
                 (m/Column
-                 .mainAxisAlignment m.MainAxisAlignment/start
+                 .mainAxisAlignment m.MainAxisAlignment/end
+                 .crossAxisAlignment m.CrossAxisAlignment/center
+                 .mainAxisSize m.MainAxisSize/min ;; Keep column tight
                  .children
-                 (mapv #(render-tag ctx %) (take 2 tags))))
-               (m/SizedBox.shrink))
+                 [;; Clickable Author Section
+                  (m/InkWell
+                   .onTap (fn []
+                            (m/Navigator.pushNamed ctx "/profile" .arguments {:id author-id})
+                            nil)
+                   .borderRadius (m/BorderRadius.circular 8.0)
+                   .child
+                   (m/Padding
+                    .padding (m/EdgeInsets.all 4.0)
+                    .child
+                    (m/Column
+                     .children [(m/Icon m.Icons/person .size 14.0 .color tokens/primary-color)
+                                (m/SizedBox .height 6.0)
+                                (mgl/MongolText author-label
+                                                .style (m/TextStyle .fontSize 12.0 .color tokens/primary-color .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold))])))
 
-             ;; 4. Meta-information (Right-aligned, bottom-aligned)
-             (m/Padding
-              .padding (m/EdgeInsets.only .left 12.0)
-              .child
-              (m/Column
-               .mainAxisAlignment m.MainAxisAlignment/end
-               .crossAxisAlignment m.CrossAxisAlignment/center
-               .children
-               [;; Clickable Author Section
-                (m/InkWell
-                 .onTap (fn []
-                          (m/Navigator.pushNamed ctx "/profile" .arguments {:id author-id})
-                          nil)
-                 .borderRadius (m/BorderRadius.circular 8.0)
-                 .child
-                 (m/Padding
-                  .padding (m/EdgeInsets.all 4.0)
-                  .child
-                  (m/Column
-                   .children [(m/Icon m.Icons/person .size 14.0 .color tokens/primary-color)
-                              (m/SizedBox .height 6.0)
-                              (mgl/MongolText author-label
-                                              .style (m/TextStyle .fontSize 12.0 .color tokens/primary-color .fontFamily "OyunQaganTig" .fontWeight m.FontWeight/bold))])))
+                  (m/SizedBox .height 12.0)
 
-                (m/SizedBox .height 12.0)
-
-                ;; Publish time
-                (mgl/MongolText time-str
-                                .style (m/TextStyle .fontSize 11.0 .color tokens/text-secondary .fontFamily "OyunQaganTig"))]))])))])))))))
+                  ;; Publish time
+                  (mgl/MongolText time-str
+                                  .style (m/TextStyle .fontSize 11.0 .color tokens/text-secondary .fontFamily "OyunQaganTig"))]))]))))]))))))))
