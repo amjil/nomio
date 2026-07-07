@@ -54,9 +54,10 @@
       (m/Padding
        .padding (m/EdgeInsets.all 40.0)
        .child
-       
+
        ;; 🌟 CORE MONGOLIAN ADAPTATION: Card interior is now a horizontal Row
        (m/Row
+        .crossAxisAlignment m.CrossAxisAlignment/start
         .children
         [;; 1. Source Metadata (Far Left)
          (m/Container
@@ -64,13 +65,13 @@
           .child
           (m/Column
            .mainAxisSize m.MainAxisSize/min
-           .mainAxisAlignment m.MainAxisAlignment/center
+           .mainAxisAlignment m.MainAxisAlignment/start
            .children
            [(m/Icon m.Icons/menu_book .color tokens/text-secondary .size 28.0)
             (m/SizedBox .height 16.0)
             (mgl/MongolText source-ref
                             .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .color tokens/text-secondary))]))
-         
+
          ;; 2. Vertical Divider & Main Highlight Content (Right side, Expanded)
          (m/Expanded
           .child

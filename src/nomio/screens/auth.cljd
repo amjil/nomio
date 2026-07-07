@@ -1,6 +1,7 @@
 (ns nomio.screens.auth
   "Authentication screens for Login and Registration.
-   Now fully upgraded to the Tenger Blue design system with a mixed Vertical/Horizontal layout."
+   Completely redesigned for Native Traditional Mongolian script: Left-to-Right horizontal flow.
+   Uses 100% content-driven sizing including buttons without fixed SizedBox."
   (:require ["package:flutter/material.dart" :as m]
             ["package:mongol/mongol.dart" :as mgl]
             ["dart:core" :as dc]
@@ -9,42 +10,43 @@
             [nomio.core.api :as api]
             [nomio.core.state :as state]
             [components.toast :as toast]
-            [nomio.utils.tokens :as tokens]))
+            [nomio.utils.tokens :as tokens]
+            [nomio.widgets.keyboard-wrapper :as kw]))
 
 ;; =============================================================================
 ;; UI Components
 ;; =============================================================================
 
 (defn- form-field 
-  "A specialized form row: Vertical Mongolian label on the left, standard horizontal TextField on the right."
+  "A specialized form row for Native Mongolian: Vertical label on the left, Vertical MongolTextField on the right."
   [label-text ctrl is-password? keyboard-type]
   (m/Padding
-   .padding (m/EdgeInsets.only .bottom 24.0)
+   .padding (m/EdgeInsets.only .right 24.0)
    .child
    (m/Row
-    .crossAxisAlignment m.CrossAxisAlignment/center
+    .crossAxisAlignment m.CrossAxisAlignment/start
     .children
     [;; Left: Vertical Label
-     (m/SizedBox
-      .width 32.0
-      .height 100.0 ;; Fixed height for vertical text flow
+     (m/Padding
+      .padding (m/EdgeInsets.only .top 16.0)
       .child
-      (m/Align
-       .alignment m.Alignment/centerRight
-       .child
-       (mgl/MongolText label-text 
-                       .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .color tokens/text-secondary))))
+      (mgl/MongolText label-text 
+                      .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0 .color tokens/text-secondary)))
      
      (m/SizedBox .width 16.0)
      
-     ;; Right: Horizontal Input Field
-     (m/Expanded
+     ;; Right: Vertical Input Field
+     (m/SizedBox
+      .width 56.0
+      .height 280.0
       .child
-      (m/TextField
+      (mgl/MongolTextField
        .controller ctrl
        .obscureText is-password?
        .keyboardType keyboard-type
-       .style (m/TextStyle .fontSize 16.0 .color tokens/text-primary)
+       .maxLines 1
+       .textAlign mgl/MongolTextAlign.top
+       .style (m/TextStyle .fontSize 16.0 .color tokens/text-primary .fontFamily "OyunQaganTig")
        .decoration (m/InputDecoration
                     .filled true
                     .fillColor tokens/bg-color
@@ -90,67 +92,79 @@
 
      (m/Scaffold
       .backgroundColor tokens/bg-color
+      .resizeToAvoidBottomInset false
       .body
       (m/SafeArea
        .child
-       (m/Center
-        .child
-        (m/SingleChildScrollView
-         .padding (m/EdgeInsets.all 24.0)
+       (kw/with-virtual-keyboard
+        (m/Center
          .child
-         (m/Container
-          .constraints (m/BoxConstraints .maxWidth 400.0)
-          .decoration (m/BoxDecoration
-                       .color tokens/surface-color
-                       .borderRadius (m/BorderRadius.circular 24.0)
-                       .boxShadow tokens/tenger-shadow
-                       .border (m/Border.all .color (.withOpacity tokens/primary-color 0.1) .width 1.0))
+         (m/SingleChildScrollView
+          .scrollDirection m.Axis/horizontal
+          .physics (m/BouncingScrollPhysics.)
+          .padding (m/EdgeInsets.all 24.0)
           .child
-          (m/Padding
-           .padding (m/EdgeInsets.all 40.0)
+          (m/Container
+           .decoration (m/BoxDecoration
+                        .color tokens/surface-color
+                        .borderRadius (m/BorderRadius.circular 24.0)
+                        .boxShadow tokens/tenger-shadow
+                        .border (m/Border.all .color (.withOpacity tokens/primary-color 0.1) .width 1.0))
            .child
-           (m/Column
-            .mainAxisAlignment m.MainAxisAlignment/center
-            .crossAxisAlignment m.CrossAxisAlignment/stretch
-            .children
-            [;; Branding Header
-             (m/Container
-              .padding (m/EdgeInsets.all 16.0)
-              .decoration (m/BoxDecoration .color tokens/primary-container .shape m.BoxShape/circle)
-              .child (m/Icon m.Icons/auto_stories .size 40.0 .color tokens/primary-color))
-             (m/SizedBox .height 24.0)
-             (m/Text "ᠨᠡᠪᠲᠡᠷᠡᠬᠦ"
-                     .textAlign m.TextAlign/center
-                     .style (m/TextStyle .fontSize 32.0 .fontWeight m.FontWeight/bold .color tokens/text-primary .fontFamily "OyunQaganTig"))
-             (m/SizedBox .height 48.0)
+           (m/Padding
+            .padding (m/EdgeInsets.all 40.0)
+            .child
+            (m/Row
+             .crossAxisAlignment m.CrossAxisAlignment/start
+             .children
+             [;; Branding Header
+              (m/Column
+               .mainAxisSize m.MainAxisSize/min
+               .children
+               [(m/Container
+                 .padding (m/EdgeInsets.all 16.0)
+                 .decoration (m/BoxDecoration .color tokens/primary-container .shape m.BoxShape/circle)
+                 .child (m/Icon m.Icons/auto_stories .size 40.0 .color tokens/primary-color))
+                (m/SizedBox .height 24.0)
+                (mgl/MongolText "ᠨᠡᠪᠲᠡᠷᠡᠬᠦ"
+                                .style (m/TextStyle .fontSize 32.0 .fontWeight m.FontWeight/bold .color tokens/text-primary .fontFamily "OyunQaganTig"))])
+              
+              (m/SizedBox .width 48.0)
 
-             ;; Form Fields
-             (form-field "И-мэйл хаяг" email-ctrl false m.TextInputType/emailAddress)
-             (form-field "Нууц үг" password-ctrl true m.TextInputType/text)
-             
-             (m/SizedBox .height 24.0)
+              ;; Form Fields
+              (form-field "И-мэйл хаяг" email-ctrl false m.TextInputType/emailAddress)
+              (form-field "Нууц үг" password-ctrl true m.TextInputType/text)
+              
+              (m/SizedBox .width 16.0)
 
-             ;; Login Button
-             (m/SizedBox
-              .height 54.0
-              .child
-              (m/ElevatedButton
+              ;; Login Button (🌟 FIX: 彻底去除了外部 SizedBox，靠内部 padding 自动撑开完美形状)
+              (mgl/MongolElevatedButton
                .style (m/ElevatedButton.styleFrom
                        .backgroundColor tokens/primary-color
                        .foregroundColor m.Colors/white
                        .elevation 0.0
+                       .padding (m/EdgeInsets.symmetric .vertical 48.0 .horizontal 20.0)
                        .shape (m/RoundedRectangleBorder .borderRadius (m/BorderRadius.circular 16.0)))
                .onPressed (if loading? nil do-login!)
                .child (if loading?
                         (m/SizedBox .width 24.0 .height 24.0 .child (m/CircularProgressIndicator .color m.Colors/white .strokeWidth 2.0))
-                        (m/Text "Нэвтрэх" .style (m/TextStyle .fontSize 16.0 .fontWeight m.FontWeight/bold)))))
+                        (mgl/MongolText "Нэвтрэх" .style (m/TextStyle .fontSize 16.0 .fontWeight m.FontWeight/bold .fontFamily "OyunQaganTig"))))
 
-             (m/SizedBox .height 24.0)
+              (m/SizedBox .width 32.0)
 
-             ;; Navigation Link
-             (m/TextButton
-              .onPressed (fn [] (m/Navigator.pushNamed ctx "/register") nil)
-              .child (m/Text "Бүртгэлгүй юу? Бүртгүүлэх" .style (m/TextStyle .color tokens/primary-color)))]))))))))))
+              ;; Navigation Link
+              (m/Padding
+               .padding (m/EdgeInsets.only .top 16.0)
+               .child
+               (m/InkWell
+                .onTap (fn [] (m/Navigator.pushNamed ctx "/register") nil)
+                .borderRadius (m/BorderRadius.circular 8.0)
+                .child
+                (m/Padding
+                 .padding (m/EdgeInsets.all 12.0)
+                 .child
+                 (mgl/MongolText "Бүртгэлгүй юу? Бүртгүүлэх" 
+                                 .style (m/TextStyle .color tokens/primary-color .fontFamily "OyunQaganTig")))))])))))))))))
 
 ;; =============================================================================
 ;; 2. Register Screen
@@ -193,56 +207,59 @@
 
      (m/Scaffold
       .backgroundColor tokens/bg-color
+      .resizeToAvoidBottomInset false
       .appBar (m/AppBar .backgroundColor m.Colors/transparent .elevation 0.0
                         .iconTheme (m/IconThemeData .color tokens/primary-color))
       .body
       (m/SafeArea
        .child
-       (m/Center
-        .child
-        (m/SingleChildScrollView
-         .padding (m/EdgeInsets.all 24.0)
+       (kw/with-virtual-keyboard
+        (m/Center
          .child
-         (m/Container
-          .constraints (m/BoxConstraints .maxWidth 400.0)
-          .decoration (m/BoxDecoration
-                       .color tokens/surface-color
-                       .borderRadius (m/BorderRadius.circular 24.0)
-                       .boxShadow tokens/tenger-shadow
-                       .border (m/Border.all .color (.withOpacity tokens/primary-color 0.1) .width 1.0))
+         (m/SingleChildScrollView
+          .scrollDirection m.Axis/horizontal
+          .physics (m/BouncingScrollPhysics.)
+          .padding (m/EdgeInsets.all 24.0)
           .child
-          (m/Padding
-           .padding (m/EdgeInsets.all 40.0)
+          (m/Container
+           .decoration (m/BoxDecoration
+                        .color tokens/surface-color
+                        .borderRadius (m/BorderRadius.circular 24.0)
+                        .boxShadow tokens/tenger-shadow
+                        .border (m/Border.all .color (.withOpacity tokens/primary-color 0.1) .width 1.0))
            .child
-           (m/Column
-            .mainAxisAlignment m.MainAxisAlignment/center
-            .crossAxisAlignment m.CrossAxisAlignment/stretch
-            .children
-            [;; Branding Header
-             (m/Text "ᠪᠦᠷᠢᠳᠬᠡᠭᠦᠯᠬᠦ"
-                     .textAlign m.TextAlign/center
-                     .style (m/TextStyle .fontSize 32.0 .fontWeight m.FontWeight/bold .color tokens/text-primary .fontFamily "OyunQaganTig"))
-             (m/SizedBox .height 40.0)
+           (m/Padding
+            .padding (m/EdgeInsets.all 40.0)
+            .child
+            (m/Row
+             .crossAxisAlignment m.CrossAxisAlignment/start
+             .children
+             [;; Branding Header
+              (m/Column
+               .mainAxisSize m.MainAxisSize/min
+               .children
+               [(mgl/MongolText "ᠪᠦᠷᠢᠳᠬᠡᠭᠦᠯᠬᠦ"
+                                .style (m/TextStyle .fontSize 32.0 .fontWeight m.FontWeight/bold .color tokens/text-primary .fontFamily "OyunQaganTig"))])
+              
+              (m/SizedBox .width 48.0)
 
-             ;; Form Fields
-             (form-field "Нэвтрэх нэр" handle-ctrl false m.TextInputType/text)
-             (form-field "Харагдах нэр" nickname-ctrl false m.TextInputType/text)
-             (form-field "И-мэйл" email-ctrl false m.TextInputType/emailAddress)
-             (form-field "Нууц үг" password-ctrl true m.TextInputType/text)
-             
-             (m/SizedBox .height 24.0)
+              ;; Form Fields
+              (form-field "Нэвтрэх нэр" handle-ctrl false m.TextInputType/text)
+              (form-field "Харагдах нэр" nickname-ctrl false m.TextInputType/text)
+              (form-field "И-мэйл" email-ctrl false m.TextInputType/emailAddress)
+              (form-field "Нууц үг" password-ctrl true m.TextInputType/text)
+              
+              (m/SizedBox .width 16.0)
 
-             ;; Register Button
-             (m/SizedBox
-              .height 54.0
-              .child
-              (m/ElevatedButton
+              ;; Register Button (🌟 FIX: 彻底去除了外部 SizedBox，靠内部 padding 自动撑开)
+              (mgl/MongolElevatedButton
                .style (m/ElevatedButton.styleFrom
                        .backgroundColor tokens/primary-color
                        .foregroundColor m.Colors/white
                        .elevation 0.0
+                       .padding (m/EdgeInsets.symmetric .vertical 48.0 .horizontal 20.0)
                        .shape (m/RoundedRectangleBorder .borderRadius (m/BorderRadius.circular 16.0)))
                .onPressed (if loading? nil do-register!)
                .child (if loading?
                         (m/SizedBox .width 24.0 .height 24.0 .child (m/CircularProgressIndicator .color m.Colors/white .strokeWidth 2.0))
-                        (m/Text "Бүртгүүлэх" .style (m/TextStyle .fontSize 16.0 .fontWeight m.FontWeight/bold)))))]))))))))))
+                        (mgl/MongolText "Бүртгүүлэх" .style (m/TextStyle .fontSize 16.0 .fontWeight m.FontWeight/bold .fontFamily "OyunQaganTig"))))])))))))))))

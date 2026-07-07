@@ -9,18 +9,25 @@
 (defn- parse-attrs-to-api 
   "Converts {:bold true, :italic true} to {\"bold\" true, \"italic\" true}."
   [attrs]
-  (reduce-kv (fn [m k v] 
-               (assoc m (name k) v)) 
-             {} 
-             (or attrs {})))
+  (let [attrs (or attrs {})
+        ;; Fallback safeguard for keys extraction
+        ks (if (dart/is? attrs dc/Map) (.-keys ^dc/Map attrs) (keys attrs))]
+    (reduce (fn [m k] 
+              (assoc m (name k) (get attrs k))) 
+            {} 
+            ks)))
 
 (defn- parse-attrs-from-api 
-  "Converts {\"bold\" true} to {:bold true}."
+  "Converts {\"bold\" true} to {:bold true}.
+   Safely handles Dart _Map<String, dynamic> returned by jsonDecode."
   [attrs]
-  (reduce-kv (fn [m k v] 
-               (assoc m (keyword k) v)) 
-             {} 
-             (or attrs {})))
+  (let [attrs (or attrs {})
+        ;; Safely extract keys from Dart's native Map without IKVReduce
+        ks (if (dart/is? attrs dc/Map) (.-keys ^dc/Map attrs) (keys attrs))]
+    (reduce (fn [m k] 
+              (assoc m (keyword (str k)) (get attrs k))) 
+            {} 
+            ks)))
 
 ;; =============================================================================
 ;; Core Conversion Logic
@@ -45,7 +52,7 @@
                                     "id" id
                                     "text" (:content block "")}
                       
-                      ;; FIX 1: Intercept reference cards to extract their IDs and inject them into the backend JSON payload.
+                      ;; Intercept reference cards to extract their IDs and inject them into the backend JSON payload.
                       payload (cond-> base-payload
                                 (= block-type "post-quote")
                                 (assoc "ref_post_id" (get-in block [:data :ref-post-id]))
@@ -68,7 +75,13 @@
 (defn api-blocks->state
   "[Draft Deserialization] Restores the JSON array structure received from the backend into the !state initialization data required by the rich text editor."
   [api-blocks]
-  (let [api-blocks (or api-blocks [])
+  ;; 🌟 FIX: 空状态兜底。如果完全没有块（新建帖子），必须提供一个默认的空白段落块！
+  (let [api-blocks (if (empty? api-blocks)
+                     [{"id" (str (.-millisecondsSinceEpoch (DateTime/now)))
+                       "type" "paragraph"
+                       "text" ""}]
+                     api-blocks)
+        
         ;; 1. Extract all IDs to build the ordered root array
         root (mapv #(get % "id") api-blocks)
         
@@ -86,7 +99,7 @@
                                      :children []
                                      :attributes {}})
                                      
-                             ;; FIX 2: Intercept reference blocks from the backend and rebuild their IDs into the editor's :data map.
+                             ;; Intercept reference blocks from the backend and rebuild their IDs into the editor's :data map.
                              (or (= b-type :post-quote) (= b-type :block-ref))
                              (assoc acc id
                                     {:id id

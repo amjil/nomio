@@ -1,6 +1,6 @@
 (ns nomio.screens.create-post
   "Creation Center: A smart unified editor handling both Creating and Editing posts, with Reference Insertion.
-   Updated with Tenger Blue design system and fixed IME candidate visibility."
+   Updated with Tenger Blue design system and purely relying on the editor's built-in IME management."
   (:require
    ["package:flutter/material.dart" :as m]
    ["dart:core" :as dc]
@@ -18,7 +18,7 @@
    [nomio.widgets.reference-search :as ref-search]
    [nomio.widgets.reference-cards :as ref-cards]
    
-   ;; Editor components
+   ;; Editor components (Mongol Editor handles its own keyboard!)
    [rich-editor.components.editor :as editor]
    [rich-editor.components.text-field :as custom-tf]
    [rich-editor.components.node-view :as node-view]
@@ -27,7 +27,6 @@
    ;; Editor core commands and configs
    [rich-editor.commands.editor-commands :as editor-cmd]
    [rich-editor.services.history-service :as history]
-   [rich-editor.services.ime-service :as ime]
    [rich-editor.defaults :as defaults]))
 
 ;; =============================================================================
@@ -35,41 +34,14 @@
 ;; =============================================================================
 
 (defonce !editor-state
-  (atom {:root ["block-1"]
-         :blocks {"block-1" {:id "block-1" :type :paragraph :content "" :content-spans [] :children []}}
-         :active-block-id nil
-         :cursor-visible false
-         :external-keyboard-delegate nil
-         :history {:undo-stack [] :redo-stack [] :max-depth 100}}))
+  (atom {:root [] :blocks {} :active-block-id nil :cursor-visible false :history {:undo-stack [] :redo-stack [] :max-depth 100}}))
 
-(defonce !refresh-tick (atom 0))
 (defonce !uploading? (atom false))
 (defonce !publishing? (atom false))
 
-(defonce _init-callbacks
-  (do
-    (ime/set-merge-focus-callback! (fn [!s prev-id new-offset] (editor-cmd/focus-block !s prev-id new-offset)))
-    (ime/set-split-focus-callback! (fn [!s new-id _] (editor-cmd/focus-block !s new-id 0)))
-    (ime/set-after-update-callback! (fn [] (swap! !refresh-tick inc)))
-    (ime/set-get-caret-offset-callback!
-     (fn [block-id]
-       (when-let [text-key (get @node-view/!block-text-keys block-id)]
-         (when-let [node-ctx (.-currentContext text-key)]
-           (try
-             (let [^m/RenderBox rb (.findRenderObject node-ctx)]
-               (.localToGlobal rb m.Offset/zero))
-             (catch Exception _ nil))))))))
-
+;; 🌟 完全信任 parser 的状态解析和空块兜底功能
 (defn- init-editor-state! [initial-blocks]
-  (let [base-state {:active-block-id nil 
-                    :cursor-visible false
-                    :external-keyboard-delegate nil
-                    :history {:undo-stack [] :redo-stack [] :max-depth 100}}]
-    (if (seq initial-blocks)
-      (reset! !editor-state (merge base-state (editor-parser/api-blocks->state initial-blocks)))
-      (reset! !editor-state (merge base-state {:root ["block-1"]
-                                               :blocks {"block-1" {:id "block-1" :type :paragraph :content "" :content-spans [] :children []}}}))))
-  (reset! !refresh-tick 0)
+  (reset! !editor-state (editor-parser/api-blocks->state initial-blocks))
   (reset! !uploading? false)
   (reset! !publishing? false))
 
@@ -90,9 +62,6 @@
      :context ctx
      :managed [title-focus-node (m/FocusNode)
                title-ctrl (m/TextEditingController .text (or edit-title ""))]
-               
-     ;; 🌟 核心修复 1：必须监听输入法引擎抛出的 refresh 信号！
-     :watch [tick !refresh-tick]
      
      :let [publish!
            (fn []
@@ -120,11 +89,11 @@
                                         (toast/error ctx clean-err)))))))))]
 
      (m/Scaffold
-      ;; Apply Tenger Blue background
       .backgroundColor tokens/bg-color
       
-      ;; 🌟 核心修复 2：彻底移除 .resizeToAvoidBottomInset false，防止虚拟键盘物理遮挡候选词工具栏！
-
+      ;; 🌟 锁定底部外边距，防止原生键盘弹起挤压（这一步保留，对原生键盘依然有效）
+      .resizeToAvoidBottomInset false
+      
       .appBar
       (m/AppBar
        .elevation 0.0
@@ -172,6 +141,7 @@
       .body
       (m/SafeArea
        .child
+       ;; 🌟 直接挂载 mongol-editor，它内部已自带输入法生态！
        (editor/mongol-editor
         !editor-state
         

@@ -13,12 +13,122 @@
    [components.toast :as toast]))
 
 ;; =============================================================================
+;; Highlight Detail Modal
+;; =============================================================================
+
+(defn- show-highlight-detail! 
+  "A dedicated horizontal reading canvas to view full-length truncated highlights and notes."
+  [ctx item]
+  (let [content (get item "content" "")
+        note (get item "note" "")
+        source-ref (get item "source_ref")
+        created-at (get item "inserted_at" "Саяхан")
+        display-date (if (>= (count created-at) 10) (subs created-at 0 10) created-at)]
+    (m/showModalBottomSheet
+     .context ctx
+     .isScrollControlled true
+     .backgroundColor m.Colors/transparent
+     .builder
+     (fn [b-ctx]
+       (m/Container
+        .padding (m/EdgeInsets.only .left 24.0 .right 24.0 .top 24.0 .bottom (+ 24.0 (.-bottom (m/MediaQuery.paddingOf b-ctx))))
+        .decoration (m/BoxDecoration 
+                     .color tokens/bg-color
+                     .borderRadius (m/BorderRadius.vertical .top (m/Radius.circular 24.0)))
+        .child
+        (m/SizedBox
+         .height 400.0
+         .child
+         (m/Row
+          .crossAxisAlignment m.CrossAxisAlignment/start
+          .children
+          [;; =========================================================
+           ;; 1. Header & Actions (Far Left)
+           ;; =========================================================
+           (m/Column
+            .mainAxisAlignment m.MainAxisAlignment/spaceBetween
+            .crossAxisAlignment m.CrossAxisAlignment/center
+            .children
+            [(m/IconButton 
+              .icon (m/Icon m.Icons/close .color tokens/text-secondary)
+              .onPressed #(m/Navigator.pop b-ctx))
+             
+             ;; Optional action: explicitly jump to the original post
+             (if source-ref
+               (m/Column
+                .mainAxisSize m.MainAxisSize/min
+                .children
+                [(m/IconButton
+                  .icon (m/Icon m.Icons/open_in_new .color tokens/primary-color)
+                  .tooltip "Эх сурвалж руу очих"
+                  .onPressed (fn []
+                               (m/Navigator.pop b-ctx)
+                               (m/Navigator.pushNamed ctx "/post" .arguments {:id source-ref})
+                               nil))
+                 (m/SizedBox .height 8.0)
+                 (mgl/MongolText "Эх сурвалж" .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 12.0 .color tokens/primary-color .fontWeight m.FontWeight/bold))])
+               (m/SizedBox.shrink))
+             
+             (m/Expanded
+              .child
+              (m/Padding
+               .padding (m/EdgeInsets.symmetric .vertical 16.0)
+               .child
+               (mgl/MongolText "Эшлэлийн дэлгэрэнгүй"
+                               .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 18.0 .fontWeight m.FontWeight/bold .color tokens/text-primary))))])
+           
+           (m/SizedBox .width 24.0)
+           (m/VerticalDivider .color (.withOpacity tokens/text-secondary 0.2))
+           (m/SizedBox .width 24.0)
+
+           ;; =========================================================
+           ;; 2. Content (Middle) - Allows infinite horizontal scroll
+           ;; =========================================================
+           (m/Expanded
+            .flex 3
+            .child
+            (m/SingleChildScrollView
+             .scrollDirection m.Axis/horizontal
+             .physics (m/BouncingScrollPhysics.)
+             .child
+             (mgl/MongolText content
+                             .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 18.0 .color tokens/text-primary .height 1.6))))
+           
+           ;; =========================================================
+           ;; 3. Note (Right, if present)
+           ;; =========================================================
+           (if (not (empty? note))
+             (m/Expanded
+              .flex 2
+              .child
+              (m/Container
+               .margin (m/EdgeInsets.only .left 24.0)
+               .padding (m/EdgeInsets.all 24.0)
+               .decoration (m/BoxDecoration 
+                            .color tokens/primary-container 
+                            .borderRadius (m/BorderRadius.circular 16.0))
+               .child
+               (m/SingleChildScrollView
+                .scrollDirection m.Axis/horizontal
+                .physics (m/BouncingScrollPhysics.)
+                .child
+                (m/Row
+                 .crossAxisAlignment m.CrossAxisAlignment/start
+                 .children
+                 [(m/Icon m.Icons/lightbulb_outline .color tokens/primary-color .size 20.0)
+                  (m/SizedBox .width 16.0)
+                  (mgl/MongolText note
+                                  .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0 .color tokens/primary-color .height 1.6))]))))
+             (m/SizedBox.shrink))])))))))
+
+;; =============================================================================
 ;; Highlight Card Component (Exclusive to Profile)
 ;; =============================================================================
 
 (defn- highlight-card 
   "Read-only highlight card for the profile screen.
-   Uses a Left-to-Right Row layout: Icon/Date -> Content -> Note."
+   Uses a Left-to-Right Row layout: Icon/Date -> Content -> Note.
+   Dynamically sizes to content without fixed widths."
   [ctx item]
   (let [content (get item "content" "")
         note (get item "note" "")
@@ -27,7 +137,7 @@
         display-date (if (>= (count created-at) 10) (subs created-at 0 10) created-at)
         has-note? (not (empty? note))]
     (m/Container
-     ;; Dynamic Card Width for LTR layout
+     ;; 🌟 FIX: Removed fixed .width entirely!
      .margin (m/EdgeInsets.only .right 20.0 .bottom 24.0 .top 12.0)
      .decoration (m/BoxDecoration
                   .color tokens/surface-color
@@ -41,16 +151,15 @@
       (m/InkWell
        .borderRadius (m/BorderRadius.circular 20.0)
        .onTap (fn []
-                (when source-ref
-                  (m/Navigator.pushNamed ctx "/post" .arguments {:id source-ref}))
+                (show-highlight-detail! ctx item)
                 nil)
        .child
        (m/Padding
         .padding (m/EdgeInsets.all 24.0)
         .child
-        ;; Internal Layout is now a Left-to-Right Row
         (m/Row
          .crossAxisAlignment m.CrossAxisAlignment/start
+         .mainAxisSize m.MainAxisSize/min ;; 🌟 FIX: Content-driven sizing
          .children
          [;; 1. Metadata (Far Left)
           (m/Column
@@ -67,6 +176,7 @@
           (m/SizedBox .width 24.0)
 
           ;; 2. Highlight Content (Middle)
+          ;; 🌟 FIX: Removed m/Expanded so it naturally wraps horizontal layout based on content
           (mgl/MongolText content
                           .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0 .color tokens/text-primary .fontWeight m.FontWeight/bold .height 1.4)
                           .maxLines 10
@@ -82,11 +192,13 @@
                           .borderRadius (m/BorderRadius.circular 12.0)
                           .border (m/Border.all .color (.withOpacity tokens/text-secondary 0.1)))
              .child
-             (m/Column
+             (m/Row
               .crossAxisAlignment m.CrossAxisAlignment/start
+              .mainAxisSize m.MainAxisSize/min ;; 🌟 FIX: Content-driven sizing
               .children
               [(m/Icon m.Icons/edit_note .size 16.0 .color tokens/text-secondary)
-               (m/SizedBox .height 12.0)
+               (m/SizedBox .width 12.0)
+               ;; 🌟 FIX: Removed inner m/Expanded
                (mgl/MongolText note
                                .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .color tokens/text-secondary)
                                .maxLines 8
@@ -105,7 +217,6 @@
         is-me? (and current-uid (= target-user-id current-uid))]
     
     (if should-redirect?
-      ;; 🌟 FIX: 如果需要强制登录拦截，返回一个独立的 f/widget，以便安全地捕获 BuildContext (ctx)
       (f/widget
        :context ctx
        (do
@@ -113,7 +224,6 @@
              (.addPostFrameCallback (fn [_] (m/Navigator.pushNamed ctx "/login") nil)))
          (m/SizedBox.shrink)))
 
-      ;; 否则，进入正常的个人主页渲染流程
       (let [!user-info (atom nil)
             !items (atom [])
             !loading? (atom true)
@@ -144,9 +254,8 @@
                                      (dc/print (str "Profile load error: " e))))))))]
         
         (when target-user-id
-          (-> (api/fetch-user-posts target-user-id) ;; 降级降落，安全获取
+          (-> (api/fetch-user-posts target-user-id)
               (.then (fn [_] 
-                       ;; 这里拉取 me 或指定 user 数据
                        (if is-me?
                          (-> (api/fetch-me) (.then #(reset! !user-info %)))
                          (reset! !user-info {"id" target-user-id "username" "user" "nickname" "Nomio Хэрэглэгч"}))))
