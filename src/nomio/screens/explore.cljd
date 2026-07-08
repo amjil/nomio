@@ -6,6 +6,7 @@
   (:require
    ["package:flutter/material.dart" :as m]
    ["package:mongol/mongol.dart" :as mgl]
+   ["dart:core" :as dc]
    [clojure.string :as str]
    [cljd.flutter :as f]
    [nomio.core.api :as api]
@@ -47,28 +48,30 @@
                         (-> fetch-promise
                             (.then (fn [data]
                                      (let [items (cond
-                                                   (sequential? data) data
-                                                   (and (map? data) (sequential? (:data data))) (:data data)
-                                                   (and (map? data) (sequential? (get data "data"))) (get data "data")
+                                                   (dart/is? data dc/Iterable) (vec data)
+                                                   (and (map? data) (dart/is? (:data data) dc/Iterable)) (vec (:data data))
+                                                   (and (map? data) (dart/is? (get data "data") dc/Iterable)) (vec (get data "data"))
                                                    :else [])]
                                        (reset! !posts items)
                                        (reset! !loading? false))))
-                            (.catchError (fn [_]
+                            (.catchError (fn [e]
                                            (reset! !posts [])
-                                           (reset! !loading? false))))))
+                                           (reset! !loading? false)
+                                           (dc/print (str "Explore search error: " e)))))))
 
         load-tags! (fn []
                      (-> (api/fetch-hot-tags :limit 10)
                          (.then (fn [tags-data]
                                   (let [items (cond
-                                                (sequential? tags-data) tags-data
-                                                (and (map? tags-data) (sequential? (:data tags-data))) (:data tags-data)
-                                                (and (map? tags-data) (sequential? (get tags-data "data"))) (get tags-data "data")
+                                                (dart/is? tags-data dc/Iterable) (vec tags-data)
+                                                (and (map? tags-data) (dart/is? (:data tags-data) dc/Iterable)) (vec (:data tags-data))
+                                                (and (map? tags-data) (dart/is? (get tags-data "data") dc/Iterable)) (vec (get tags-data "data"))
                                                 :else [])
                                         tag-names (map #(or (get % "tag") (get % :tag)) items)]
                                     (reset! !hot-tags (vec tag-names)))))
-                         (.catchError (fn [_]
-                                        (reset! !hot-tags [])))))]
+                         (.catchError (fn [e]
+                                        (reset! !hot-tags [])
+                                        (dc/print (str "Explore hot-tags error: " e))))))]
 
     (load-posts! "")
     (load-tags!)
@@ -153,34 +156,37 @@
            (m/Padding
             .padding (m/EdgeInsets.only .top 24.0)
             .child
-            (m/Column
+            (m/Row
+             .mainAxisSize m.MainAxisSize/min
              .crossAxisAlignment m.CrossAxisAlignment/start
              .children
              [(mgl/MongolText "Түгээмэл сэдвүүд"
                               .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 20.0 .fontWeight m.FontWeight/bold .color tokens/text-primary))
-              (m/SizedBox .height 24.0)
+              (m/SizedBox .width 24.0)
 
               (if (empty? hot-tags)
-                (m/SizedBox .height 100.0 .child (m/Center .child (m/CircularProgressIndicator .strokeWidth 2.0 .color tokens/primary-color)))
-                (m/Wrap
-                 .direction m.Axis/vertical
-                 .spacing 16.0
-                 .runSpacing 16.0
-                 .children
-                 (mapv (fn [tag]
-                         (m/InkWell
-                          .onTap (fn [] (m/Navigator.pushNamed ctx "/topic" .arguments {:tag tag}) nil) 
-                          .borderRadius (m/BorderRadius.circular 12.0)
-                          .child
-                          (m/Container
-                           .padding (m/EdgeInsets.symmetric .horizontal 12.0 .vertical 16.0)
-                           .decoration (m/BoxDecoration
-                                        .color tokens/primary-container
-                                        .borderRadius (m/BorderRadius.circular 12.0))
+                (m/Center .child (m/CircularProgressIndicator .strokeWidth 2.0 .color tokens/primary-color))
+                (m/SingleChildScrollView
+                 .child
+                 (m/Wrap
+                  .direction m.Axis/vertical
+                  .spacing 16.0
+                  .runSpacing 16.0
+                  .children
+                  (mapv (fn [tag]
+                          (m/InkWell
+                           .onTap (fn [] (m/Navigator.pushNamed ctx "/topic" .arguments {:tag tag}) nil)
+                           .borderRadius (m/BorderRadius.circular 12.0)
                            .child
-                           (mgl/MongolText (str "# " tag)
-                                           .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .fontWeight m.FontWeight/w600 .color tokens/primary-color)))))
-                       hot-tags)))])))
+                           (m/Container
+                            .padding (m/EdgeInsets.symmetric .horizontal 12.0 .vertical 16.0)
+                            .decoration (m/BoxDecoration
+                                         .color tokens/primary-container
+                                         .borderRadius (m/BorderRadius.circular 12.0))
+                            .child
+                            (mgl/MongolText (str "# " tag)
+                                            .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .fontWeight m.FontWeight/w600 .color tokens/primary-color)))))
+                        hot-tags))))])))
 
           ;; ---------------------------------------------------------
           ;; Sliver C: Divider
