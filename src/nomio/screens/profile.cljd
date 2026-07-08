@@ -112,11 +112,11 @@
                 .scrollDirection m.Axis/horizontal
                 .physics (m/BouncingScrollPhysics.)
                 .child
-                (m/Row
+                (m/Column
                  .crossAxisAlignment m.CrossAxisAlignment/start
                  .children
                  [(m/Icon m.Icons/lightbulb_outline .color tokens/primary-color .size 20.0)
-                  (m/SizedBox .width 16.0)
+                  (m/SizedBox .height 16.0)
                   (mgl/MongolText note
                                   .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 16.0 .color tokens/primary-color .height 1.6))]))))
              (m/SizedBox.shrink))])))))))
@@ -190,12 +190,12 @@
                           .borderRadius (m/BorderRadius.circular 12.0)
                           .border (m/Border.all .color (.withOpacity tokens/text-secondary 0.1)))
              .child
-             (m/Row
+             (m/Column
               .crossAxisAlignment m.CrossAxisAlignment/start
               .mainAxisSize m.MainAxisSize/min
               .children
               [(m/Icon m.Icons/edit_note .size 16.0 .color tokens/text-secondary)
-               (m/SizedBox .width 12.0)
+               (m/SizedBox .height 12.0)
                (mgl/MongolText note
                                .style (m/TextStyle .fontFamily "OyunQaganTig" .fontSize 14.0 .color tokens/text-secondary)
                                .maxLines 8
