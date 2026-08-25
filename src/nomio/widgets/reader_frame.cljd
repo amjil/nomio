@@ -1,0 +1,124 @@
+(ns nomio.widgets.reader-frame
+  "Shared furniture for the three reader screens — article, question, answer.
+   They differ in what hangs off the sides, not in how a page is framed."
+  (:require ["package:flutter/material.dart" :as m]
+            [clojure.string :as str]
+            [nomio.theme :as theme]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.ui :as ui]))
+
+(defn- byline [content]
+  (let [name (or (get-in content [:author :display-name])
+                 (get-in content [:author :username])
+                 "")]
+    (if (empty? name)
+      ui/nothing
+      (m/Row
+       .mainAxisSize m.MainAxisSize/min
+       .crossAxisAlignment m.CrossAxisAlignment/start
+       .children
+       [(ui/top (ui/avatar name 30.0))
+        (ui/gap-h 9)
+        (mg/muted name)]))))
+
+(defn- tag-line [tags on-tag]
+  (ui/tappable
+   on-tag
+   theme/radius-pill
+   (m/Container
+    .padding (m.EdgeInsets/symmetric .horizontal 6.0 .vertical 9.0)
+    .decoration (m/BoxDecoration
+                 .color theme/violet-soft
+                 .borderRadius (theme/r theme/radius-pill))
+    .child (mg/text (str "#" (str/join " #" tags))
+                    {:size 12.0 :color theme/violet :max-lines 2}))))
+
+(defn- action-row [actions]
+  (m/Row
+   .mainAxisSize m.MainAxisSize/min
+   .crossAxisAlignment m.CrossAxisAlignment/start
+   .children
+   (into []
+         (comp (keep identity)
+               (map (fn [{:keys [icon on-tap active?]}]
+                      (ui/icon-button {:icon icon :on-tap on-tap :active? active?
+                                       :size 36.0})))
+               (interpose (ui/gap-h 8)))
+         actions)))
+
+(defn meta-aside
+  "The leading column of a reader: what this is, what it is called, who wrote
+   it, and everything you can do to it."
+  [{:keys [content on-back on-tag actions extra]}]
+  (let [{:keys [color wash icon label]} (theme/tone (:type content))
+        tags (:tags content)]
+    (m/Padding
+     .padding (m.EdgeInsets/fromLTRB 18.0 16.0 8.0 18.0)
+     .child
+     (m/Column
+      .mainAxisSize m.MainAxisSize/min
+      .crossAxisAlignment m.CrossAxisAlignment/start
+      .children
+      [(ui/icon-button {:icon m.Icons/arrow_back_rounded :on-tap on-back})
+       (ui/gap-v 20)
+       (ui/badge {:label label :color color :wash wash :icon icon})
+       (ui/gap-v 16)
+       (m/Flexible .child (mg/title (or (:title content) "") 21.0))
+       (ui/gap-v 14)
+       (byline content)
+       (if (seq tags) (ui/gap-v 12) ui/nothing)
+       (if (seq tags) (tag-line tags on-tag) ui/nothing)
+       (if (seq actions) (ui/gap-v 20) ui/nothing)
+       (if (seq actions) (action-row actions) ui/nothing)
+       (if extra (ui/gap-v 16) ui/nothing)
+       (or extra ui/nothing)]))))
+
+(defn paper
+  "The document surface. A slightly raised panel keeps the body text from
+   floating loose on the page background."
+  [child]
+  (m/Padding
+   .padding (m.EdgeInsets/symmetric .horizontal 6.0 .vertical 16.0)
+   .child
+   (ui/panel
+    {:pad 4.0
+     :radius theme/radius-lg
+     :color theme/surface
+     :shadow theme/soft-shadow}
+    child)))
+
+(defn pane
+  "A titled side column. The title runs down the leading edge, where a reader
+   of vertical script looks first."
+  [{:keys [label icon divider?] :or {divider? true}} body]
+  (m/Container
+   .decoration (when divider?
+                 (m/BoxDecoration
+                  .border (m/Border .left (m/BorderSide .color theme/divider .width 1.0))))
+   .child
+   (m/Row
+    .crossAxisAlignment m.CrossAxisAlignment/stretch
+    .children
+    [(m/Padding
+      .padding (m.EdgeInsets/fromLTRB 12.0 18.0 2.0 18.0)
+      .child
+      (m/Column
+       .mainAxisSize m.MainAxisSize/min
+       .crossAxisAlignment m.CrossAxisAlignment/start
+       .children
+       [(m/Icon icon .size 15.0 .color theme/ink-faint)
+        (ui/gap-v 10)
+        (mg/label label)]))
+     (m/Expanded .child body)])))
+
+(defn comments-pane [list-widget composer-widget]
+  (pane
+   {:label "Comments" :icon m.Icons/mode_comment_outlined}
+   (m/Column
+    .children
+    [(m/Expanded .flex 2 .child list-widget)
+     (m/Expanded
+      .flex 1
+      .child (m/Padding
+              .padding (m.EdgeInsets/only .bottom 14.0)
+              .child composer-widget))])))

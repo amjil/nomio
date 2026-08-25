@@ -4,11 +4,12 @@
             [cljd.flutter :as f]
             [clojure.string :as str]
             [nomio.core.api :as api]
+            [nomio.platform :as platform]
             [nomio.theme :as theme]
             [nomio.widgets.content-card :as cards]
             [nomio.widgets.keyboard :as kb]
-            [nomio.widgets.mongol :as mg]
             [nomio.widgets.paged :as paged]
+            [nomio.widgets.ui :as ui]
             [rich-editor.components.text-field :as custom-tf]))
 
 (defonce ^:private !ime (atom {:external-keyboard-delegate nil}))
@@ -18,6 +19,50 @@
 (defn- cancel-timer-atom! [!t]
   (when-let [t @!t] (.cancel ^async/Timer t))
   nil)
+
+(defn- field-box [query ctrl focus schedule! clear!]
+  (ui/input-panel
+   {:icon m.Icons/search_rounded}
+   (m/Row
+    .crossAxisAlignment m.CrossAxisAlignment/start
+    .children
+    [(custom-tf/text-field
+      !ime
+      {:controller ctrl
+       :focus-node focus
+       :hint "Search"
+       :max-lines 1
+       :on-changed (fn [v] (schedule! (or v "")))
+       :style (m/TextStyle .color theme/ink .fontFamily theme/font-family)
+       :decoration (m/InputDecoration .border m/InputBorder.none)})
+     (if (str/blank? query)
+       ui/nothing
+       (ui/top (ui/icon-button {:icon m.Icons/close_rounded
+                                :on-tap clear!
+                                :size 30.0})))])))
+
+(defn- page-aside []
+  (m/Padding
+   .padding (m.EdgeInsets/fromLTRB 20.0 24.0 6.0 24.0)
+   .child (ui/page-header {:title "Search"
+                           :icon m.Icons/search_rounded
+                           :subtitle "Titles, bodies and tags"})))
+
+(defn- results-pane [query !results fetch]
+  (m/Expanded
+   .child
+   (if (str/blank? query)
+     (ui/state-view {:icon m.Icons/manage_search_rounded
+                     :title "Type to search"
+                     :message "Articles, questions and answers"})
+     (paged/strip !results fetch cards/card))))
+
+(defn- field-and-results [query ctrl focus schedule! clear! !results fetch]
+  (m/Row
+   .crossAxisAlignment m.CrossAxisAlignment/stretch
+   .children
+   [(field-box query ctrl focus schedule! clear!)
+    (results-pane query !results fetch)]))
 
 (defn page []
   (f/widget
@@ -43,30 +88,37 @@
                      (reset! !timer (async/Timer. debounce #(run! v)))
                      nil)]
 
-   :managed [ctrl (m/TextEditingController.)
+   :managed [_ime-control (kb/install)
+             :dispose kb/restore-ime!
+             ctrl (m/TextEditingController.)
              focus (m/FocusNode.)
              _ !timer :dispose cancel-timer-atom!]
 
+   ;; IME writes the controller directly and skips MongolTextField.onChanged.
+   :bg-watcher ([^m/TextEditingValue {v .-text} ctrl]
+                (schedule! (or v "")))
    :watch [query !query]
-   (kb/wrap
-    (m/Row
-     .crossAxisAlignment m.CrossAxisAlignment/start
-     .children
-     [(m/Padding
-       .padding (m.EdgeInsets/all 16.0)
-       .child
-       (custom-tf/text-field
-        !ime
-        {:controller ctrl
-         :focus-node focus
-         :hint "Search"
-         :max-lines 1
-         :on-changed (fn [v] (schedule! (or v "")))
-         :style (m/TextStyle .color theme/ink .fontFamily theme/font-family)
-         :decoration (m/InputDecoration .border m/InputBorder.none)}))
-
-      (m/Expanded
-       .child
-       (if (str/blank? query)
-         (m/Center .child (mg/muted "Type to search"))
-         (paged/strip !results fetch cards/card)))]))))
+   :let [clear! (fn [] (.clear ctrl) (run! "") nil)
+         fields (field-and-results query ctrl focus schedule! clear! !results fetch)]
+   ;; Own Scaffold so the IME overlay Stack fills the content pane.
+   ;; Desktop: header stays outside kb/wrap so the overlay origin sits on the
+   ;; field — candidates-overlay uses Stack-local Positioned (fallback ~100,100).
+   ;; Mobile: wrap the whole row so the virtual-keyboard bar stays full width.
+   (m/Scaffold
+    .backgroundColor theme/transparent
+    .resizeToAvoidBottomInset false
+    .body
+    (m/SafeArea
+     .child
+     (if (platform/desktop?)
+       (m/Row
+        .crossAxisAlignment m.CrossAxisAlignment/stretch
+        .children
+        [(page-aside)
+         (m/Expanded .child (kb/wrap fields))])
+       (kb/wrap
+        (m/Row
+         .crossAxisAlignment m.CrossAxisAlignment/stretch
+         .children
+         [(page-aside)
+          (m/Expanded .child fields)])))))))

@@ -2,6 +2,10 @@
   "Desktop vs mobile detection for shell / bootstrap branching."
   (:require ["package:flutter/foundation.dart" :as foundation :refer [kIsWeb]]))
 
+(defn android? []
+  (when-not kIsWeb
+    (= foundation/defaultTargetPlatform foundation.TargetPlatform/android)))
+
 (defn mobile?
   "Android or iOS (native). Web is treated as desktop chrome."
   []

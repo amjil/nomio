@@ -1,7 +1,6 @@
 (ns nomio.pages.write
   "Article / Question / Answer editor with autosave, preview, publish."
   (:require ["package:flutter/material.dart" :as m]
-            ["package:mongol/mongol.dart" :as mgl]
             ["dart:async" :as async]
             [cljd.flutter :as f]
             [clojure.string :as str]
@@ -15,6 +14,7 @@
             [nomio.widgets.keyboard :as kb]
             [nomio.widgets.mongol :as mg]
             [nomio.widgets.toast :as toast]
+            [nomio.widgets.ui :as ui]
             [rich-editor.components.text-field :as custom-tf]))
 
 (defonce ^:private !ime (atom {:external-keyboard-delegate nil}))
@@ -87,63 +87,107 @@
    .builder
    (fn [_]
      (m/Dialog
-      .backgroundColor theme/bg
+      .backgroundColor theme/transparent
+      .insetPadding (m.EdgeInsets/all 28.0)
       .child
-      (m/SizedBox
-       .width 720.0
-       .height 480.0
-       .child
+      (ui/panel
+       {:width 760.0
+        :height 520.0
+        :pad 0.0
+        :radius theme/radius-lg
+        :shadow theme/card-shadow}
        (m/Column
         .children
         [(m/Padding
-          .padding (m.EdgeInsets/all 12.0)
-          .child (mg/text (or title "") {:size 18.0}))
-         (m/Expanded .child (nreader/widget document))])))))
-  nil)
+          .padding (m.EdgeInsets/fromLTRB 18.0 14.0 10.0 10.0)
+          .child
+          (m/Row
+           .children
+           [(m/Expanded .child (mg/title (or title "Preview") 16.0))
+            (ui/icon-button {:icon m.Icons/close_rounded
+                             :size 32.0
+                             :on-tap (fn []
+                                       (.pop (m/Navigator.of ctx))
+                                       nil)})]))
+         (m/Expanded
+          .child (m/Padding
+                  .padding (m.EdgeInsets/fromLTRB 8.0 0.0 8.0 12.0)
+                  .child (nreader/widget document)))]))))))
+
+(defn- meta-field [ctrl focus hint icon size-color]
+  (ui/input-panel
+   {:icon icon
+    :margin (m.EdgeInsets/symmetric .horizontal 6.0 .vertical 18.0)}
+   (custom-tf/text-field
+    !ime
+    {:controller ctrl
+     :focus-node focus
+     :hint hint
+     :max-lines 1
+     :style (m/TextStyle .color size-color .fontSize 16.0 .fontFamily theme/font-family)
+     :decoration (m/InputDecoration .border m/InputBorder.none)})))
+
+(defn- save-mark [save-status]
+  (let [[icon color]
+        (case save-status
+          :saving [m.Icons/sync_rounded theme/ink-faint]
+          :saved [m.Icons/check_rounded theme/jade]
+          :error [m.Icons/error_outline_rounded theme/danger]
+          [m.Icons/edit_outlined theme/ink-faint])]
+    (m/Icon icon .size 16.0 .color color)))
 
 (defn- editor-chrome
-  "AppBar bits that need !state (undo/redo enable). Own :watch so the scaffold
-   can mount mongol-block-editor without setState-during-build — same pattern as
-   mgl-mail-app compose toolbar / mgl-notes-app editor-chrome."
+  "Left-hand tools that need !state (undo/redo enable). Own :watch so the
+   scaffold can mount mongol-block-editor without setState-during-build —
+   same pattern as mgl-mail-app compose toolbar / mgl-notes-app editor-chrome."
   [content !state !save-status title-ctrl tags-ctrl content-id]
   (f/widget
    :context ctx
    :get [m/Navigator]
    :watch [st !state
            save-status !save-status]
-   (let [save-label (case save-status
-                      :saving "…"
-                      :saved "✓"
-                      :error "!"
-                      "")]
-     (m/AppBar
-      .leading (m/IconButton
-                .icon (m/Icon m.Icons/arrow_back)
-                .onPressed (fn []
-                             (-> (save! content-id title-ctrl tags-ctrl !state !save-status)
-                                 (.then (fn [saved?]
-                                          (when (.-mounted ^m/BuildContext ctx)
-                                            (if saved?
-                                              (.pop navigator)
-                                              (toast/error! ctx "save failed")))
-                                          nil)))
-                             nil))
-      .title (mg/text (str (status-label content) "  " save-label) {:size 14.0})
-      .actions
-      [(m/IconButton
-        .icon (m/Icon m.Icons/undo)
-        .onPressed (when (seq (get-in st [:history :undo-stack]))
-                     #(history/undo! !state)))
-       (m/IconButton
-        .icon (m/Icon m.Icons/redo)
-        .onPressed (when (seq (get-in st [:history :redo-stack]))
-                     #(history/redo! !state)))
-       (mgl/MongolTextButton
-        .onPressed #(preview-dialog ctx @!state (.-text title-ctrl))
-        .child (mg/text "preview" {:size 13.0 :color theme/accent}))
-       (mgl/MongolTextButton
-        .onPressed #(publish-flow! ctx navigator content-id title-ctrl tags-ctrl !state)
-        .child (mg/text "Publish" {:size 13.0 :color theme/accent}))]))))
+   (let [tone (:color (theme/tone (:type content)))
+         can-undo? (seq (get-in st [:history :undo-stack]))
+         can-redo? (seq (get-in st [:history :redo-stack]))]
+     (m/Padding
+      .padding (m.EdgeInsets/fromLTRB 16.0 16.0 8.0 16.0)
+      .child
+      (m/Column
+       .mainAxisSize m.MainAxisSize/min
+       .crossAxisAlignment m.CrossAxisAlignment/start
+       .children
+       [(ui/icon-button
+         {:icon m.Icons/arrow_back_rounded
+          :on-tap (fn []
+                    (-> (save! content-id title-ctrl tags-ctrl !state !save-status)
+                        (.then (fn [saved?]
+                                 (when (.-mounted ^m/BuildContext ctx)
+                                   (if saved?
+                                     (.pop navigator)
+                                     (toast/error! ctx "save failed")))
+                                 nil)))
+                    nil)})
+        (ui/gap-v 18)
+        (ui/badge {:label (status-label content)
+                   :color tone
+                   :wash theme/accent-soft
+                   :icon m.Icons/edit_outlined})
+        (ui/gap-v 12)
+        (save-mark save-status)
+        (ui/gap-v 18)
+        (ui/icon-button {:icon m.Icons/undo_rounded
+                         :on-tap (when can-undo? #(history/undo! !state))})
+        (ui/gap-v 8)
+        (ui/icon-button {:icon m.Icons/redo_rounded
+                         :on-tap (when can-redo? #(history/redo! !state))})
+        (ui/gap-v 16)
+        (ui/ghost-action {:label "Preview"
+                          :icon m.Icons/visibility_outlined
+                          :on-tap #(preview-dialog ctx @!state (.-text title-ctrl))})
+        (ui/gap-v 10)
+        (ui/action {:label "Publish"
+                    :icon m.Icons/publish_rounded
+                    :on-tap #(publish-flow! ctx navigator content-id title-ctrl tags-ctrl !state)})])))))
 
 (defn- editor-screen [content]
   (f/widget
@@ -186,50 +230,33 @@
    (m/Scaffold
     .backgroundColor theme/bg
     .resizeToAvoidBottomInset false
-    ;; f/widget is not PreferredSizeWidget; PreferredSize satisfies Scaffold.appBar.
-    .appBar
-    (m/PreferredSize
-     .preferredSize (m.Size/fromHeight m/kToolbarHeight)
-     .child (editor-chrome content !state !save-status title-ctrl tags-ctrl content-id))
     .body
-    (m/SafeArea
-     .child
-     (kb/wrap
-      (m/Row
-       .crossAxisAlignment m.CrossAxisAlignment/stretch
-       .children
-       (cond-> []
-         (not answer?)
-         (conj
-          (m/Padding
-           .padding (m.EdgeInsets/all 8.0)
-           .child
-           (custom-tf/text-field
-            !ime
-            {:controller title-ctrl
-             :focus-node title-focus
-             :hint "Title"
-             :max-lines 1
-             :style (m/TextStyle .color theme/ink .fontSize 18.0 .fontFamily theme/font-family)
-             :decoration (m/InputDecoration .border m/InputBorder.none)})))
+    (ui/backdrop
+     (m/SafeArea
+      .child
+      (kb/wrap
+       (m/Row
+        .crossAxisAlignment m.CrossAxisAlignment/stretch
+        .children
+        (cond-> [(editor-chrome content !state !save-status title-ctrl tags-ctrl content-id)]
+          (not answer?)
+          (conj (meta-field title-ctrl title-focus "Title" m.Icons/title theme/ink))
 
-         (or question? (not answer?))
-         (conj
-          (m/Padding
-           .padding (m.EdgeInsets/all 8.0)
-           .child
-           (custom-tf/text-field
-            !ime
-            {:controller tags-ctrl
-             :focus-node tags-focus
-             :hint "#tag"
-             :max-lines 1
-             :style (m/TextStyle .color theme/ink-muted .fontFamily theme/font-family)
-             :decoration (m/InputDecoration .border m/InputBorder.none)})))
+          (or question? (not answer?))
+          (conj (meta-field tags-ctrl tags-focus "#tag" m.Icons/tag theme/ink-muted))
 
-         true
-         (conj
-          (m/Expanded .child editor-body)))))))))
+          true
+          (conj (m/Expanded
+                 .child
+                 (m/Padding
+                  .padding (m.EdgeInsets/fromLTRB 6.0 16.0 16.0 16.0)
+                  .child
+                  (ui/panel
+                   {:pad 8.0
+                    :radius theme/radius-lg
+                    :color theme/surface
+                    :shadow theme/soft-shadow}
+                   editor-body))))))))))))
 
 (defn- fetch
   "A missing draft is an error like any other, so the screen can report why it

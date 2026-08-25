@@ -4,14 +4,21 @@
             ["dart:convert" :as convert]
             [clojure.string :as str]
             [nomio.core.errors :as errors]
+            [nomio.platform :as platform]
             [nomio.state.store :as store]))
+
+(def ^:private env-base
+  (dart:core/String.fromEnvironment "NOMIO_API_BASE_URL" .defaultValue ""))
 
 (def base-url
   "Override for real deployments:
-     flutter run --dart-define=NOMIO_API_BASE_URL=https://…/api/v1"
-  (dart:core/String.fromEnvironment
-   "NOMIO_API_BASE_URL"
-   .defaultValue "http://127.0.0.1:4000/api/v1"))
+     flutter run --dart-define=NOMIO_API_BASE_URL=https://…/api/v1
+   Android emulator cannot use 127.0.0.1 (that is the emulator itself)."
+  (if (seq env-base)
+    env-base
+    (if (platform/android?)
+      "http://10.0.2.2:4000/api/v1"
+      "http://127.0.0.1:4000/api/v1")))
 
 (def ^:private request-timeout (dart:core/Duration. .seconds 20))
 
@@ -113,7 +120,9 @@
       (.timeout request-timeout
                 .onTimeout (fn [] (throw (Exception. errors/timeout))))
       (.then handle)
-      (.catchError (fn [_] (throw (Exception. errors/offline)))
+      (.catchError (fn [e]
+                     (dart:core/print (str "http unreachable " base-url ": " e))
+                     (throw (Exception. errors/offline)))
                    .test (fn [e] (dart/is? e http/ClientException)))))
 
 (defn get!

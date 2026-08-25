@@ -1,7 +1,10 @@
 (ns nomio.pages.home
-  (:require [nomio.core.api :as api]
+  (:require ["package:flutter/material.dart" :as m]
+            [nomio.core.api :as api]
             [nomio.widgets.content-card :as cards]
             [nomio.widgets.paged :as paged]))
 
 (defn page []
-  (paged/list-page "Home" api/list-feed cards/card))
+  (paged/list-page "Home" api/list-feed cards/card
+                   :icon m.Icons/auto_awesome_rounded
+                   :subtitle "Everything, newest first"))

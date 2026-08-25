@@ -1,0 +1,379 @@
+(ns nomio.widgets.ui
+  "The shared visual language: surfaces, page headers, pills, avatars and the
+   loading / empty / error states every feed falls back to.
+
+   Everything here is laid out for vertical script, so a 'line' of text grows
+   downward and columns advance left to right. That is why widths are the
+   scarce dimension and most stacks are Rows."
+  (:require ["package:flutter/material.dart" :as m]
+            [nomio.theme :as theme]
+            [nomio.widgets.mongol :as mg]))
+
+(def nothing (m/SizedBox.shrink))
+
+(defn gap-h [n] (m/SizedBox .width (double n)))
+(defn gap-v [n] (m/SizedBox .height (double n)))
+
+;; --- Surfaces --------------------------------------------------------------
+
+(defn backdrop
+  "Page background. A barely-there diagonal wash keeps the very wide horizontal
+   scrolls from reading as one flat block of colour."
+  [child]
+  (m/Container
+   .decoration (m/BoxDecoration
+                .gradient (m/LinearGradient
+                           .begin m.Alignment/topLeft
+                           .end m.Alignment/bottomRight
+                           .colors [theme/bg theme/bg-tint theme/bg]))
+   .child child))
+
+(defn- pad->insets [pad]
+  (if (number? pad) (m.EdgeInsets/all (double pad)) pad))
+
+(defn tappable
+  "Ink response for a decorated box. The Material has to sit *inside* the
+   painted container, or the ripple disappears behind the card's background."
+  ([on-tap child] (tappable on-tap theme/radius-md child))
+  ([on-tap radius child]
+   (m/Material
+    .color theme/transparent
+    .borderRadius (theme/r radius)
+    .child
+    (m/InkWell
+     .onTap on-tap
+     .borderRadius (theme/r radius)
+     .hoverColor (m/Color 0x0DFFFFFF)
+     .splashColor theme/accent-soft
+     .highlightColor theme/transparent
+     .child child))))
+
+(defn panel
+  "Rounded surface with a hairline border — the base of every card and box.
+   Pass `:on-tap` rather than wrapping the result, so the ripple stays inside
+   the painted box instead of behind it."
+  [{:keys [pad radius color border shadow width height margin gradient on-tap]
+    :or {pad 16.0 radius theme/radius-md color theme/surface border theme/divider}}
+   child]
+  (let [inner (m/Padding .padding (pad->insets pad) .child child)]
+    (m/Container
+     .width (when width (double width))
+     .height (when height (double height))
+     .margin margin
+     .clipBehavior m.Clip/antiAlias
+     .decoration (m/BoxDecoration
+                  .color (when-not gradient color)
+                  .gradient gradient
+                  .borderRadius (theme/r radius)
+                  .border (when border (m/Border.all .color border .width 1.0))
+                  .boxShadow shadow)
+     .child (if on-tap (tappable on-tap radius inner) inner))))
+
+(defn top
+  "Pins a natural-size widget to the top of a stretched Row slot."
+  [w]
+  (m/Column .mainAxisSize m.MainAxisSize/min .children [w]))
+
+(defn spine
+  "Thin coloured bar down the leading edge of a card — the quickest read of
+   what kind of thing the card is."
+  [color]
+  (m/Container
+   .width 3.0
+   .decoration (m/BoxDecoration .color color .borderRadius (theme/r 3.0))))
+
+;; --- Small parts -----------------------------------------------------------
+
+(defn badge
+  "Tinted capsule around a short vertical label."
+  [{:keys [label color wash icon]}]
+  (m/Container
+   .padding (m.EdgeInsets/symmetric .horizontal 6.0 .vertical 10.0)
+   .decoration (m/BoxDecoration
+                .color (or wash theme/accent-soft)
+                .borderRadius (theme/r theme/radius-pill))
+   .child
+   (m/Column
+    .mainAxisSize m.MainAxisSize/min
+    .children
+    [(if icon (m/Icon icon .size 12.0 .color color) nothing)
+     (if icon (gap-v 6) nothing)
+     (mg/label label (or color theme/accent))])))
+
+(defn pill
+  "Selectable capsule. Filter bars are columns of these."
+  [{:keys [label active? on-tap icon color]
+    :or {color theme/accent}}]
+  (tappable
+   on-tap theme/radius-pill
+   (m/AnimatedContainer
+    .duration (dart:core/Duration. .milliseconds 160)
+    .padding (m.EdgeInsets/symmetric .horizontal 9.0 .vertical 14.0)
+    .decoration (m/BoxDecoration
+                 .color (if active? theme/accent-soft theme/surface)
+                 .borderRadius (theme/r theme/radius-pill)
+                 .border (m/Border.all
+                          .color (if active? color theme/divider)
+                          .width 1.0))
+    .child
+    (m/Column
+     .mainAxisSize m.MainAxisSize/min
+     .children
+     [(if icon
+        (m/Icon icon .size 14.0 .color (if active? color theme/ink-faint))
+        nothing)
+      (if icon (gap-v 8) nothing)
+      (mg/text label {:size 13.5
+                      :color (if active? color theme/ink-muted)
+                      :weight (when active? m.FontWeight/w600)})]))))
+
+(def ^:private avatar-tones
+  [[theme/accent theme/accent-soft]
+   [theme/gold theme/gold-soft]
+   [theme/jade theme/jade-soft]
+   [theme/violet theme/violet-soft]])
+
+(defn avatar
+  "Initial in a tinted circle. The tint is derived from the name so the same
+   person keeps the same colour everywhere."
+  ([name] (avatar name 32.0))
+  ([name size]
+   (let [s (str (or name ""))
+         has? (pos? (count s))
+         [tint wash] (nth avatar-tones
+                          (if has? (mod (.codeUnitAt s 0) 4) 0))]
+     (m/Container
+      .width (double size)
+      .height (double size)
+      .decoration (m/BoxDecoration
+                   .color wash
+                   .shape m.BoxShape/circle
+                   .border (m/Border.all .color tint .width 1.0))
+      .child
+      (m/Center
+       .child
+       (if has?
+         (mg/text (.substring s 0 1)
+                  {:size (* (double size) 0.44)
+                   :color tint
+                   :weight m.FontWeight/w700})
+         (m/Icon m.Icons/person_outline .size (* (double size) 0.5) .color tint)))))))
+
+(defn icon-button
+  "Ghost circle button. Quieter than Material's, and sized for a rail.
+   A missing `on-tap` dims the glyph instead of looking like a dead control."
+  [{:keys [icon on-tap color size active?]
+    :or {color theme/ink-muted size 38.0}}]
+  (let [on? (some? on-tap)
+        ink (cond
+              (not on?) theme/ink-faint
+              active? theme/accent
+              :else color)]
+    (tappable
+     on-tap (/ (double size) 2.0)
+     (m/Container
+      .width (double size)
+      .height (double size)
+      .decoration (m/BoxDecoration
+                   .color (if active? theme/accent-soft theme/surface-alt)
+                   .shape m.BoxShape/circle
+                   .border (m/Border.all
+                            .color (if active? theme/accent theme/divider)
+                            .width 1.0))
+      .child (m/Center
+              .child (m/Icon icon
+                             .size (* (double size) 0.48)
+                             .color ink))))))
+
+(defn action
+  "Filled call-to-action holding vertical text."
+  [{:keys [label icon on-tap tone]
+    :or {tone theme/accent}}]
+  (tappable
+   on-tap theme/radius-pill
+   (m/Container
+    .padding (m.EdgeInsets/symmetric .horizontal 11.0 .vertical 18.0)
+    .decoration (m/BoxDecoration
+                 .color tone
+                 .borderRadius (theme/r theme/radius-pill))
+    .child
+    (m/Column
+     .mainAxisSize m.MainAxisSize/min
+     .children
+     [(if icon (m/Icon icon .size 15.0 .color theme/bg) nothing)
+      (if icon (gap-v 8) nothing)
+      (mg/text label {:size 14.0 :color theme/bg :weight m.FontWeight/w600})]))))
+
+(defn ghost-action
+  "Outlined counterpart to `action`, for the secondary choice."
+  [{:keys [label icon on-tap tone]
+    :or {tone theme/ink-muted}}]
+  (tappable
+   on-tap theme/radius-pill
+   (m/Container
+    .padding (m.EdgeInsets/symmetric .horizontal 10.0 .vertical 16.0)
+    .decoration (m/BoxDecoration
+                 .borderRadius (theme/r theme/radius-pill)
+                 .border (m/Border.all .color theme/divider-strong .width 1.0))
+    .child
+    (m/Column
+     .mainAxisSize m.MainAxisSize/min
+     .children
+     [(if icon (m/Icon icon .size 14.0 .color tone) nothing)
+      (if icon (gap-v 8) nothing)
+      (mg/text label {:size 13.5 :color tone})]))))
+
+(defn stat
+  "Icon over a count, for card footers."
+  [icon value color]
+  (m/Column
+   .mainAxisSize m.MainAxisSize/min
+   .children
+   [(m/Icon icon .size 13.0 .color color)
+    (gap-v 5)
+    (mg/text (str value) {:size 12.0 :color color})]))
+
+;; --- Page furniture --------------------------------------------------------
+
+(defn brand
+  "Nomio's mark — a gradient tile. Doubles as the rail's anchor."
+  ([] (brand 40.0))
+  ([size]
+   (m/Container
+    .width (double size)
+    .height (double size)
+    .decoration (m/BoxDecoration
+                 .gradient (m/LinearGradient
+                            .begin m.Alignment/topLeft
+                            .end m.Alignment/bottomRight
+                            .colors [theme/accent theme/accent-deep])
+                 .borderRadius (theme/r (* (double size) 0.3))
+                 .boxShadow theme/soft-shadow)
+    .child (m/Center
+            .child (m/Icon m.Icons/auto_stories
+                           .size (* (double size) 0.5)
+                           .color theme/bg)))))
+
+(defn page-header
+  "The left-hand column every list page opens with: a tinted glyph, the title
+   running downward, and the refresh affordance pointer users need because
+   there is no pull gesture without cards to drag."
+  [{:keys [title subtitle icon tone on-refresh extra]
+    :or {tone theme/accent icon m.Icons/layers_outlined}}]
+  (m/Column
+   .mainAxisSize m.MainAxisSize/min
+   .crossAxisAlignment m.CrossAxisAlignment/start
+   .children
+   [(m/Container
+     .width 40.0
+     .height 40.0
+     .decoration (m/BoxDecoration
+                  .color theme/surface-alt
+                  .borderRadius (theme/r 13.0)
+                  .border (m/Border.all .color theme/divider .width 1.0))
+     .child (m/Center .child (m/Icon icon .size 20.0 .color tone)))
+    (gap-v 18)
+    (mg/title title 21.0)
+    (if subtitle (gap-v 12) nothing)
+    (if subtitle (mg/muted subtitle) nothing)
+    (if on-refresh (gap-v 18) nothing)
+    (if on-refresh
+      (icon-button {:icon m.Icons/refresh_rounded :on-tap on-refresh})
+      nothing)
+    (if extra (gap-v 14) nothing)
+    (or extra nothing)]))
+
+;; --- Async states ----------------------------------------------------------
+
+(defn input-panel
+  "The vertical text field's box — icon on the leading edge, field filling the
+   rest. Width is left unconstrained so MongolTextField can size itself."
+  [{:keys [icon margin]} child]
+  (panel
+   {:pad (m.EdgeInsets/symmetric .horizontal 10.0 .vertical 16.0)
+    :radius theme/radius-lg
+    :margin (or margin (m.EdgeInsets/symmetric .horizontal 4.0 .vertical 22.0))
+    :color theme/surface}
+   (m/Row
+    .crossAxisAlignment m.CrossAxisAlignment/start
+    .children
+    [(if icon (top (m/Icon icon .size 18.0 .color theme/ink-faint)) nothing)
+     (if icon (gap-h 8) nothing)
+     child])))
+
+(defn spinner []
+  (m/Center
+   .child (m/SizedBox .width 26.0 .height 26.0
+                      .child (m/CircularProgressIndicator
+                              .strokeWidth 2.4
+                              .color theme/accent))))
+
+(defn state-view
+  "One layout for empty, error and sign-in-required, so those three moments
+   feel like the same product rather than three loose ends."
+  [{:keys [icon title message tone action-label action-icon on-action]
+    :or {icon m.Icons/inbox_outlined tone theme/ink-faint
+         action-icon m.Icons/refresh_rounded}}]
+  (m/Center
+   .child
+   (m/Padding
+    .padding (m.EdgeInsets/all 32.0)
+    .child
+    (m/Row
+     .mainAxisSize m.MainAxisSize/min
+     .crossAxisAlignment m.CrossAxisAlignment/center
+     .children
+     [(m/Container
+       .width 60.0
+       .height 60.0
+       .decoration (m/BoxDecoration
+                    .color theme/surface
+                    .borderRadius (theme/r 20.0)
+                    .border (m/Border.all .color theme/divider .width 1.0))
+       .child (m/Center .child (m/Icon icon .size 26.0 .color tone)))
+      (gap-h 20)
+      (mg/text title {:size 16.0 :color theme/ink-muted :weight m.FontWeight/w600})
+      (if message (gap-h 12) nothing)
+      (if message (mg/muted message) nothing)
+      (if on-action (gap-h 20) nothing)
+      (if on-action
+        (action {:label (or action-label "Retry")
+                 :icon action-icon
+                 :on-tap on-action})
+        nothing)]))))
+
+(defn- skeleton-bar [w h]
+  (m/Container
+   .width (double w)
+   .height (double h)
+   .decoration (m/BoxDecoration
+                .color theme/surface-hi
+                .borderRadius (theme/r 6.0))))
+
+(defn- skeleton-card [i]
+  (panel
+   {:width 236.0
+    :margin (m.EdgeInsets/symmetric .horizontal 8.0 .vertical 14.0)
+    :pad 18.0}
+   (m/Row
+    .crossAxisAlignment m.CrossAxisAlignment/start
+    .children
+    [(skeleton-bar 26.0 64.0)
+     (gap-h 14)
+     (skeleton-bar 15.0 (- 210.0 (* 26.0 (mod i 3))))
+     (gap-h 10)
+     (skeleton-bar 9.0 (- 150.0 (* 18.0 (mod i 2))))
+     (gap-h 8)
+     (skeleton-bar 9.0 96.0)])))
+
+(defn skeleton-strip
+  "Placeholder cards while the first page is in flight — the strip keeps its
+   shape instead of collapsing to a lone spinner."
+  []
+  (m/IgnorePointer
+   .child
+   (m/ListView
+    .scrollDirection m.Axis/horizontal
+    .physics (m/NeverScrollableScrollPhysics.)
+    .padding (m.EdgeInsets/symmetric .horizontal 8.0)
+    .children (mapv skeleton-card [0 1 2 3 4]))))

@@ -4,27 +4,23 @@
             [cljd.flutter :as f]
             [nomio.core.errors :as errors]
             [nomio.theme :as theme]
-            [nomio.widgets.mongol :as mg]))
+            [nomio.widgets.ui :as ui]))
 
 (defn spinner []
-  (m/Center .child (m/CircularProgressIndicator .color theme/accent)))
+  (ui/spinner))
 
 (defn empty-state
   ([] (empty-state "Nothing here yet"))
-  ([label] (m/Center .child (mg/muted label))))
+  ([label]
+   (ui/state-view {:icon m.Icons/inbox_outlined :title label})))
 
 (defn- failure [e retry]
-  (m/Center
-   .child
-   (m/Row
-    .mainAxisSize m.MainAxisSize/min
-    .children
-    [(mg/text (errors/message e) {:size 14.0 :color theme/danger})
-     (if retry
-       (m/IconButton
-        .icon (m/Icon m.Icons/refresh .color theme/accent)
-        .onPressed retry)
-       (m/SizedBox.shrink))])))
+  (ui/state-view {:icon m.Icons/error_outline_rounded
+                  :tone theme/danger
+                  :title "Something went wrong"
+                  :message (errors/message e)
+                  :action-label "Retry"
+                  :on-action retry}))
 
 (defn load!
   "Run `future`, tracking {:status :loading|:ok|:error} in `!st`.
@@ -65,22 +61,27 @@
    (case (:status st)
      :ok (build (:data st))
      :error (m/Scaffold .backgroundColor theme/bg
-                        .body (failure (:error st) retry))
-     (m/Scaffold .backgroundColor theme/bg .body (spinner)))))
+                        .body (ui/backdrop (failure (:error st) retry)))
+     (m/Scaffold .backgroundColor theme/bg
+                 .body (ui/backdrop (spinner))))))
 
 (defn section
   "Left-hand column plus an async right pane — the layout the list pages share."
   [aside !st build & {:keys [retry]}]
   (m/Row
-   .crossAxisAlignment m.CrossAxisAlignment/start
+   .crossAxisAlignment m.CrossAxisAlignment/stretch
    .children
    [(m/Padding
-     .padding (m.EdgeInsets/all 16.0)
+     .padding (m.EdgeInsets/fromLTRB 20.0 24.0 12.0 24.0)
      .child aside)
     (m/Expanded .child (view !st build :retry retry))]))
 
-(defn titled-section [title !st build & {:keys [retry]}]
-  (section (mg/text title {:size 20.0 :weight m.FontWeight/bold})
+(defn titled-section [title !st build & {:keys [retry icon subtitle tone]}]
+  (section (ui/page-header {:title title
+                            :subtitle subtitle
+                            :icon (or icon m.Icons/layers_outlined)
+                            :tone (or tone theme/accent)
+                            :on-refresh retry})
            !st build :retry retry))
 
 (defn list-page

@@ -3,6 +3,7 @@
   (:require ["package:flutter/material.dart" :as m]
             [cljd.flutter :as f]
             [nomio.platform :as platform]
+            [nomio.theme :as theme]
             [virtual-keyboard.input-control :as input-control]
             [virtual-keyboard.keyboard :as vk]
             [virtual-keyboard.options :as vk-options]
@@ -11,8 +12,15 @@
 (def info
   (merge vk-options/keyboard-option
          {:keyboard/mongol-font-family "OyunQaganTig"
-          :keyboard/key-container-color m/Colors.grey.shade500
-          :keyboard/font-size 16}))
+          :keyboard/english-font-family theme/font-family
+          :keyboard/font-size 16
+          :keyboard/key-container-color theme/surface-hi
+          :keyboard/long-press-container-color theme/surface-alt
+          :keyboard/action-keys-container-color theme/accent-deep
+          :keyboard/key-text-color theme/ink
+          :keyboard/action-text-color theme/ink-muted
+          :keyboard/shift-click-text-color theme/ink
+          :keyboard/key-cap-border-radius (int theme/radius-sm)}))
 
 (defn install []
   (input-control/set-control)
@@ -28,7 +36,8 @@
 (defn bar []
   (m/Container
    .decoration (m/BoxDecoration
-                .border (m/Border .top (m/BorderSide .color (m/Color 0x22FFFFFF) .width 0.5)))
+                .color theme/surface
+                .border (m/Border .top (m/BorderSide .color theme/divider .width 1.0)))
    .child (vk/keyboard {})))
 
 (defn wrap

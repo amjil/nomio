@@ -1,69 +1,87 @@
 (ns nomio.widgets.content-card
   (:require ["package:flutter/material.dart" :as m]
-            [clojure.string :as str]
             [nomio.content.document :as doc]
             [nomio.state.store :as store]
             [nomio.theme :as theme]
-            [nomio.widgets.async :as asy]
-            [nomio.widgets.mongol :as mg]))
-
-(defn- type-label [t]
-  (case t
-    :article "Article"
-    :question "Question"
-    :answer "Answer"
-    (str t)))
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.ui :as ui]))
 
 (defn- card-excerpt [c]
   (or (:excerpt c)
       (when (:document c) (doc/excerpt (:document c) 60))
       ""))
 
-(defn- engagement-label [c]
-  (str (when (:like-count c) (str "♥ " (:like-count c) " "))
-       (when (:vote-score c) (str "▲ " (:vote-score c)))))
-
 (defn- author-label [c]
   (or (get-in c [:author :display-name])
       (get-in c [:author :username])
       ""))
 
+(defn- meta-column
+  "Author and engagement, gathered into one narrow trailing column. Everything
+   in here has a known width, which is what leaves the title and excerpt enough
+   room to actually draw a line of script."
+  [c]
+  (let [name (author-label c)
+        likes (:like-count c)
+        votes (:vote-score c)]
+    (m/SizedBox
+     .width 34.0
+     .child
+     (m/Column
+      .crossAxisAlignment m.CrossAxisAlignment/start
+      .children
+      (cond-> []
+        (seq name)
+        (conj (ui/avatar name 30.0)
+              (ui/gap-v 10)
+              (m/Flexible .child (mg/muted name)))
+
+        likes
+        (conj (ui/gap-v 12)
+              (ui/stat m.Icons/favorite_rounded likes theme/danger))
+
+        votes
+        (conj (ui/gap-v 12)
+              (ui/stat m.Icons/arrow_upward_rounded votes theme/jade)))))))
+
 (defn card [c]
-  (m/InkWell
-   .onTap #(store/open-content! c)
-   .child
-   (m/Container
-    .width 220.0
-    .margin (m.EdgeInsets/symmetric .horizontal 8.0 .vertical 12.0)
-    .padding (m.EdgeInsets/all 16.0)
-    .decoration (m/BoxDecoration
-                 .color theme/surface
-                 .borderRadius (m.BorderRadius/circular 12.0)
-                 .border (m/Border.all .color theme/divider))
-    .child
-    ;; Vertical Mongolian text grows along the row's main axis, so everything
-    ;; of unbounded length is Flexible or a long title overflows the card.
-    (m/Row
-     .crossAxisAlignment m.CrossAxisAlignment/start
-     .children
-     [(mg/text (type-label (:type c)) {:size 12.0 :color theme/accent})
-      (m/SizedBox .width 8.0)
-      (m/Flexible
-       .child (mg/text (or (:title c) "") {:size 18.0 :weight m.FontWeight/w600}))
-      (m/SizedBox .width 8.0)
-      (m/Flexible .child (mg/muted (card-excerpt c)))
-      (m/SizedBox .width 8.0)
-      (m/Flexible .child (mg/muted (author-label c)))
-      (if (seq (:tags c))
-        (m/Flexible .child (mg/muted (str "#" (str/join " #" (:tags c)))))
-        (m/SizedBox.shrink))
-      (if (or (:like-count c) (:vote-score c))
-        (mg/muted (engagement-label c))
-        (m/SizedBox.shrink))]))))
+  (let [{:keys [color wash icon label]} (theme/tone (:type c))
+        excerpt (card-excerpt c)]
+    (ui/panel
+     {:width 278.0
+      :margin (m.EdgeInsets/symmetric .horizontal 8.0 .vertical 14.0)
+      :pad 18.0
+      :radius theme/radius-lg
+      :shadow theme/card-shadow
+      :on-tap #(store/open-content! c)}
+     ;; Vertical script grows *down*, so a run of text spends width one column
+     ;; at a time. The two Expanded slots below are that width budget: give it
+     ;; away to fixed-size decoration and the text has nowhere to render.
+     (m/Row
+      .crossAxisAlignment m.CrossAxisAlignment/stretch
+      .children
+      [(ui/spine color)
+       (ui/gap-h 15)
+       (ui/top (ui/badge {:label label :color color :wash wash :icon icon}))
+       (ui/gap-h 13)
+       (m/Expanded
+        .flex 3
+        .child (mg/text (or (:title c) "Untitled")
+                        {:size 18.0 :weight m.FontWeight/w600
+                         :height 1.15 :max-lines 4}))
+       (ui/gap-h 8)
+       (if (empty? excerpt)
+         ui/nothing
+         (m/Expanded
+          .flex 2
+          .child (mg/text excerpt {:size 13.5 :color theme/ink-faint
+                                   :height 1.3 :max-lines 3})))
+       (ui/gap-h 12)
+       (meta-column c)]))))
 
 (defn strip [items]
   (if (empty? items)
-    (asy/empty-state)
+    (ui/state-view {:icon m.Icons/inbox_outlined :title "Nothing here yet"})
     (m/ListView
      .scrollDirection m.Axis/horizontal
      .padding (m.EdgeInsets/symmetric .horizontal 8.0)

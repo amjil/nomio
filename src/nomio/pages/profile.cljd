@@ -1,6 +1,5 @@
 (ns nomio.pages.profile
   (:require ["package:flutter/material.dart" :as m]
-            ["package:mongol/mongol.dart" :as mgl]
             [cljd.flutter :as f]
             [nomio.core.api :as api]
             [nomio.state.store :as store]
@@ -9,50 +8,82 @@
             [nomio.widgets.content-card :as cards]
             [nomio.widgets.mongol :as mg]
             [nomio.widgets.sign-in :as sign-in]
-            [nomio.widgets.toast :as toast]))
+            [nomio.widgets.toast :as toast]
+            [nomio.widgets.ui :as ui]))
 
-(defn- follow-button [ctx u following? reload!]
-  (mgl/MongolTextButton
-   .onPressed
+(defn- toggle-follow! [ctx u following? reload!]
+  (store/require-auth!
    (fn []
-     (store/require-auth!
-      (fn []
-        (-> (if following? (api/unfollow! (:id u)) (api/follow! (:id u)))
-            (.then (fn [_]
-                     (when (.-mounted ^m/BuildContext ctx)
-                       (reload!))
-                     nil))
-            (.catchError (fn [e]
-                           (when (.-mounted ^m/BuildContext ctx)
-                             (toast/error! ctx e))
-                           nil))))))
-   .child (mg/text (if following? "unfollow" "follow")
-                   {:size 13.0 :color theme/accent})))
+     (-> (if following? (api/unfollow! (:id u)) (api/follow! (:id u)))
+         (.then (fn [_]
+                  (when (.-mounted ^m/BuildContext ctx)
+                    (reload!))
+                  nil))
+         (.catchError (fn [e]
+                        (when (.-mounted ^m/BuildContext ctx)
+                          (toast/error! ctx e))
+                        nil)))))
+  nil)
+
+(defn- counter [value label]
+  (m/Column
+   .mainAxisSize m.MainAxisSize/min
+   .crossAxisAlignment m.CrossAxisAlignment/start
+   .children
+   [(mg/text (str (or value 0)) {:size 16.0 :weight m.FontWeight/w700})
+    (ui/gap-v 6)
+    (mg/muted label 11.5)]))
 
 (defn- aside [ctx data me? reload!]
   (let [u (:user data)
-        following? (boolean (:following u))]
+        following? (boolean (:following u))
+        name (or (:display-name u) (:username u) "")]
     (m/Column
      .mainAxisSize m.MainAxisSize/min
+     .crossAxisAlignment m.CrossAxisAlignment/start
      .children
-     [(mg/text (or (:display-name u) (:username u) "") {:size 20.0})
-      (m/SizedBox .height 12.0)
+     [(ui/avatar name 54.0)
+      (ui/gap-v 18)
+      (m/Flexible .child (mg/title name 20.0))
+      (if (:username u) (ui/gap-v 10) ui/nothing)
+      (if (:username u) (mg/muted (str "@" (:username u))) ui/nothing)
+      (if (:follower-count u) (ui/gap-v 18) ui/nothing)
       (if (:follower-count u)
-        (mg/muted (str (:follower-count u) " · " (:following-count u)))
-        (m/SizedBox.shrink))
-      (if (and (not me?) u)
-        (follow-button ctx u following? reload!)
-        (m/SizedBox.shrink))
-      (if me?
-        (mgl/MongolTextButton
-         .onPressed #(store/set-nav! "bookmarks")
-         .child (mg/muted "bookmarks"))
-        (m/SizedBox.shrink))
-      (if me?
-        (mgl/MongolTextButton
-         .onPressed #(api/logout!)
-         .child (mg/muted "logout"))
-        (m/SizedBox.shrink))])))
+        (m/Row
+         .mainAxisSize m.MainAxisSize/min
+         .crossAxisAlignment m.CrossAxisAlignment/start
+         .children
+         [(counter (:follower-count u) "followers")
+          (ui/gap-h 14)
+          (counter (:following-count u) "following")])
+        ui/nothing)
+      (ui/gap-v 20)
+      (m/Row
+       .mainAxisSize m.MainAxisSize/min
+       .crossAxisAlignment m.CrossAxisAlignment/start
+       .children
+       [(if (and (not me?) u)
+          (if following?
+            (ui/ghost-action {:label "Unfollow"
+                              :icon m.Icons/person_remove_alt_1_outlined
+                              :on-tap #(toggle-follow! ctx u following? reload!)})
+            (ui/action {:label "Follow"
+                        :icon m.Icons/person_add_alt_1_rounded
+                        :on-tap #(toggle-follow! ctx u following? reload!)}))
+          ui/nothing)
+        (if me? (ui/gap-h 10) ui/nothing)
+        (if me?
+          (ui/ghost-action {:label "Saved"
+                            :icon m.Icons/bookmark_border
+                            :on-tap #(store/set-nav! "bookmarks")})
+          ui/nothing)
+        (if me? (ui/gap-h 10) ui/nothing)
+        (if me?
+          (ui/ghost-action {:label "Log out"
+                            :icon m.Icons/logout_rounded
+                            :tone theme/danger
+                            :on-tap #(api/logout!)})
+          ui/nothing)])])))
 
 (defn- contents [data me?]
   (let [items (concat (:articles data)
@@ -60,7 +91,11 @@
                       (:answers data)
                       (when me? (:drafts data)))]
     (if (empty? items)
-      (asy/empty-state "Nothing published yet")
+      (ui/state-view {:icon m.Icons/edit_note_rounded
+                      :title "Nothing published yet"
+                      :message (if me?
+                                 "Anything you write shows up here"
+                                 "This account has not published yet")})
       (cards/strip items))))
 
 (defn- profile-for [uname me?]

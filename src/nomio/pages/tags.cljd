@@ -6,18 +6,39 @@
             [nomio.theme :as theme]
             [nomio.widgets.content-card :as cards]
             [nomio.widgets.mongol :as mg]
-            [nomio.widgets.paged :as paged]))
+            [nomio.widgets.paged :as paged]
+            [nomio.widgets.ui :as ui]))
 
-(defn- tag-card [t]
-  (m/InkWell
-   .onTap #(store/push-named! (str "/tags/" (:slug t)))
-   .child
-   (m/Padding
-    .padding (m.EdgeInsets/all 16.0)
-    .child (mg/text (str "#" (:name t) " " (:count t))))))
+(defn card
+  "A tag reads as a narrow column: the name, then how much is filed under it."
+  [t]
+  (ui/panel
+   {:width 152.0
+    :margin (m.EdgeInsets/symmetric .horizontal 7.0 .vertical 14.0)
+    :pad 16.0
+    :radius theme/radius-lg
+    :shadow theme/soft-shadow
+    :on-tap #(store/push-named! (str "/tags/" (:slug t)))}
+   (m/Row
+    .crossAxisAlignment m.CrossAxisAlignment/stretch
+    .children
+    [(ui/spine theme/violet)
+     (ui/gap-h 13)
+     (ui/top (m/Icon m.Icons/tag .size 16.0 .color theme/violet))
+     (ui/gap-h 10)
+     (m/Expanded
+      .child (mg/text (or (:name t) "")
+                      {:size 16.0 :weight m.FontWeight/w600 :max-lines 2}))
+     (ui/gap-h 10)
+     (ui/top (ui/badge {:label (str (or (:count t) 0))
+                        :color theme/violet
+                        :wash theme/violet-soft}))])))
 
 (defn page []
-  (paged/list-page "Tags" api/tags tag-card))
+  (paged/list-page "Tags" api/tags card
+                   :icon m.Icons/tag
+                   :tone theme/violet
+                   :subtitle "Browse by topic"))
 
 (defn tag-screen [slug]
   (f/widget
@@ -27,5 +48,25 @@
          _ (paged/load-more! ctx !st fetch)]
    (m/Scaffold
     .backgroundColor theme/bg
-    .appBar (m/AppBar .title (mg/text (str "#" slug)))
-    .body (paged/strip !st fetch cards/card))))
+    .body
+    (ui/backdrop
+     (m/SafeArea
+      .child
+      (m/Row
+       .crossAxisAlignment m.CrossAxisAlignment/stretch
+       .children
+       [(m/Padding
+         .padding (m.EdgeInsets/fromLTRB 16.0 20.0 12.0 20.0)
+         .child
+         (m/Column
+          .mainAxisSize m.MainAxisSize/min
+          .crossAxisAlignment m.CrossAxisAlignment/start
+          .children
+          [(ui/icon-button {:icon m.Icons/arrow_back_rounded
+                            :on-tap #(store/pop!)})
+           (ui/gap-v 20)
+           (m/Flexible .child (mg/title (str "#" slug) 20.0))
+           (ui/gap-v 16)
+           (ui/icon-button {:icon m.Icons/refresh_rounded
+                            :on-tap (fn [] (paged/reload! ctx !st fetch) nil)})]))
+        (m/Expanded .child (paged/strip !st fetch cards/card))]))))))

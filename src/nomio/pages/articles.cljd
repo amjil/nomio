@@ -1,7 +1,12 @@
 (ns nomio.pages.articles
-  (:require [nomio.core.api :as api]
+  (:require ["package:flutter/material.dart" :as m]
+            [nomio.core.api :as api]
+            [nomio.theme :as theme]
             [nomio.widgets.content-card :as cards]
             [nomio.widgets.paged :as paged]))
 
 (defn page []
-  (paged/list-page "Articles" api/list-articles cards/card))
+  (paged/list-page "Articles" api/list-articles cards/card
+                   :icon m.Icons/article_outlined
+                   :tone theme/accent
+                   :subtitle "Long-form writing"))

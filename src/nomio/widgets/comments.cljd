@@ -1,21 +1,80 @@
 (ns nomio.widgets.comments
   "Comments use mgl-richtext-editor (simple-editor), not the block editor."
   (:require ["package:flutter/material.dart" :as m]
-            ["package:mongol/mongol.dart" :as mgl]
             [cljd.flutter :as f]
             [clojure.string :as str]
             [rich-editor.components.simple-editor :as se]
             [nomio.core.api :as api]
             [nomio.state.store :as store]
             [nomio.theme :as theme]
-            [nomio.widgets.async :as asy]
             [nomio.widgets.mongol :as mg]
-            [nomio.widgets.toast :as toast]))
+            [nomio.widgets.toast :as toast]
+            [nomio.widgets.ui :as ui]))
 
 (def ^:private post-id "main-post-id")
 
-(defn- comment-body [c]
-  (mg/text (or (:content c) "") {:size 14.0}))
+;; "reply" in Mongolian script.
+(def ^:private reply-label "ᠬᠠᠷᠢᠭᠤᠯᠬᠤ")
+
+(defn- author-label [c]
+  (or (get-in c [:author :display-name])
+      (get-in c [:author :username])
+      ""))
+
+(defn- byline [c]
+  (let [name (author-label c)]
+    (m/Row
+     .mainAxisSize m.MainAxisSize/min
+     .crossAxisAlignment m.CrossAxisAlignment/start
+     .children
+     [(ui/top (ui/avatar name 24.0))
+      (ui/gap-h 7)
+      (mg/muted name)])))
+
+(defn- reply-link [on-reply id]
+  (ui/tappable
+   #(on-reply id)
+   theme/radius-sm
+   (m/Padding
+    .padding (m.EdgeInsets/symmetric .horizontal 4.0 .vertical 6.0)
+    .child
+    (m/Row
+     .mainAxisSize m.MainAxisSize/min
+     .crossAxisAlignment m.CrossAxisAlignment/start
+     .children
+     [(ui/top (m/Icon m.Icons/reply_rounded .size 13.0 .color theme/accent))
+      (ui/gap-h 5)
+      (mg/text reply-label {:size 12.5 :color theme/accent})]))))
+
+(defn- comment-node
+  "One comment and every descendant under it. Nested replies used to be
+   dropped because the tree only walked one level below each root."
+  [c by-parent on-reply]
+  (let [kids (or (get by-parent (:id c)) [])]
+    (m/Column
+     .crossAxisAlignment m.CrossAxisAlignment/start
+     .mainAxisSize m.MainAxisSize/min
+     .children
+     (into
+      [(byline c)
+       (ui/gap-v 10)
+       (mg/text (or (:content c) "") {:size 14.0 :height 1.3})
+       (if on-reply (ui/gap-v 6) ui/nothing)
+       (if on-reply (reply-link on-reply (:id c)) ui/nothing)]
+      ;; A reply hangs off its parent with a rule down its side, so a deep
+      ;; thread stays legible in a single narrow column.
+      (map (fn [k]
+             (m/Padding
+              .padding (m.EdgeInsets/only .top 14.0 .left 4.0)
+              .child
+              (m/Container
+               .padding (m.EdgeInsets/only .left 12.0)
+               .decoration (m/BoxDecoration
+                            .border (m/Border .left (m/BorderSide
+                                                     .color theme/divider-strong
+                                                     .width 1.0)))
+               .child (comment-node k by-parent on-reply))))
+           kids)))))
 
 (defn tree
   ([comments] (tree comments nil))
@@ -23,47 +82,66 @@
    (let [by-parent (group-by :parent-id comments)
          roots (or (get by-parent nil) [])]
      (if (empty? roots)
-       (asy/empty-state "No comments yet")
+       (ui/state-view {:icon m.Icons/mode_comment_outlined
+                       :title "No comments yet"})
        (m/ListView
         .scrollDirection m.Axis/horizontal
-        .padding (m.EdgeInsets/all 8.0)
+        .padding (m.EdgeInsets/all 10.0)
         .children
         (mapv (fn [c]
-                (let [replies (get by-parent (:id c) [])]
-                  (m/Container
-                   ;; Column width for vertical Mongolian: text grows downward,
-                   ;; so this is how much text fits before it wraps sideways.
-                   .width 200.0
-                   .margin (m.EdgeInsets/only .right 8.0)
-                   .padding (m.EdgeInsets/all 12.0)
-                   .decoration (m/BoxDecoration
-                                .color theme/surface
-                                .borderRadius (m.BorderRadius/circular 8.0))
-                   .child
-                   (m/Column
-                    .crossAxisAlignment m.CrossAxisAlignment/start
-                    .children
-                    [(mg/muted (or (get-in c [:author :display-name])
-                                   (get-in c [:author :username]) ""))
-                     (m/SizedBox .height 8.0)
-                     (m/Expanded .child (comment-body c))
-                     (if on-reply
-                       (mgl/MongolTextButton
-                        .onPressed #(on-reply (:id c))
-                        .child (mg/muted "ᠬᠠᠷᠢᠭᠤᠯᠬᠤ")) ; "reply"
-                       (m/SizedBox.shrink))
-                     (if (seq replies)
-                       (m/Expanded
-                        .child
-                        (m/Column
-                         .children
-                         (mapv (fn [r]
-                                 (m/Padding
-                                  .padding (m.EdgeInsets/only .top 8.0)
-                                  .child (comment-body r)))
-                               replies)))
-                       (m/SizedBox.shrink))]))))
+                (ui/panel
+                 ;; Column width for vertical Mongolian: text grows downward,
+                 ;; so this is how much text fits before it wraps sideways.
+                 {:width 208.0
+                  :margin (m.EdgeInsets/only .right 10.0)
+                  :pad 14.0
+                  :radius theme/radius-md}
+                 (m/SingleChildScrollView
+                  .child (comment-node c by-parent on-reply))))
               roots))))))
+
+(defn- send! [ctx !ed !tick !reply target-type target-id on-posted]
+  (store/require-auth!
+   (fn []
+     (let [content (or (get-in @!ed [:blocks post-id :content]) "")
+           spans (or (get-in @!ed [:blocks post-id :content-spans]) [])]
+       (if (str/blank? content)
+         (toast/info! ctx "Write something first")
+         (-> (api/create-comment!
+              (cond-> {:target-type target-type
+                       :target-id target-id
+                       :content (str/trim content)
+                       :content-spans spans}
+                @!reply (assoc :parent-id @!reply)))
+             (.then (fn [_]
+                      (when (.-mounted ^m/BuildContext ctx)
+                        (reset! !ed @(se/init-simple-state))
+                        (reset! !reply nil)
+                        (swap! !tick inc)
+                        (when on-posted (on-posted))
+                        (toast/success! ctx "Comment posted"))
+                      nil))
+             (.catchError (fn [e]
+                            (when (.-mounted ^m/BuildContext ctx)
+                              (toast/error! ctx e))
+                            nil)))))))
+  nil)
+
+(defn- replying-chip [!reply]
+  (m/Padding
+   .padding (m.EdgeInsets/only .bottom 8.0)
+   .child
+   (m/Row
+    .mainAxisSize m.MainAxisSize/min
+    .crossAxisAlignment m.CrossAxisAlignment/start
+    .children
+    [(ui/top (m/Icon m.Icons/reply_rounded .size 13.0 .color theme/accent))
+     (ui/gap-h 6)
+     (mg/text reply-label {:size 12.5 :color theme/accent})
+     (ui/gap-h 4)
+     (ui/top (ui/icon-button {:icon m.Icons/close_rounded
+                              :size 26.0
+                              :on-tap #(reset! !reply nil)}))])))
 
 (defn composer
   [target-type target-id & {:keys [on-posted parent-id !reply-to]}]
@@ -75,47 +153,19 @@
          !actual-reply (or !reply-to (atom parent-id))]
    :watch [_ !tick
            reply !actual-reply]
-   (m/Column
-    .children
-    [(if reply
-       (m/Padding
-        .padding (m.EdgeInsets/symmetric .horizontal 8.0)
-        .child
-        (m/Row
-         .children
-         [(mg/muted "ᠬᠠᠷᠢᠭᠤᠯᠬᠤ") ; 蒙古文 "回复"
-          (m/IconButton
-           .icon (m/Icon m.Icons/close .size 16.0)
-           .onPressed #(reset! !actual-reply nil))]))
-       (m/SizedBox.shrink))
-     
-     (m/Expanded .child (se/simple-editor !ed))
-     
-     (m/IconButton
-      .icon (m/Icon m.Icons/send .color theme/accent)
-      .onPressed
-      (fn []
-        (store/require-auth!
-         (fn []
-           (let [content (or (get-in @!ed [:blocks post-id :content]) "")
-                 spans (or (get-in @!ed [:blocks post-id :content-spans]) [])]
-             (if (str/blank? content)
-               (toast/info! ctx "Write something first")
-               (-> (api/create-comment!
-                    (cond-> {:target-type target-type
-                             :target-id target-id
-                             :content (str/trim content)
-                             :content-spans spans}
-                      @!actual-reply (assoc :parent-id @!actual-reply)))
-                   (.then (fn [_]
-                            (when (.-mounted ^m/BuildContext ctx)
-                              (reset! !ed @(se/init-simple-state))
-                              (reset! !actual-reply nil)
-                              (swap! !tick inc)
-                              (when on-posted (on-posted))
-                              (toast/success! ctx "Comment posted"))
-                            nil))
-                   (.catchError (fn [e]
-                                  (when (.-mounted ^m/BuildContext ctx)
-                                    (toast/error! ctx e))
-                                  nil)))))))))])))
+   (ui/panel
+    {:pad 12.0
+     :radius theme/radius-lg
+     :margin (m.EdgeInsets/symmetric .horizontal 10.0)
+     :color theme/surface}
+    (m/Column
+     .crossAxisAlignment m.CrossAxisAlignment/start
+     .children
+     [(if reply (replying-chip !actual-reply) ui/nothing)
+      (m/Expanded .child (se/simple-editor !ed))
+      (ui/gap-v 10)
+      (ui/icon-button {:icon m.Icons/send_rounded
+                       :active? true
+                       :size 34.0
+                       :on-tap #(send! ctx !ed !tick !actual-reply
+                                       target-type target-id on-posted)})]))))

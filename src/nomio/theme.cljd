@@ -1,17 +1,78 @@
 (ns nomio.theme
-  "Shared UI tokens — dark writing surface, matching mgl-notes-app."
+  "Design tokens — one dark ink surface the whole app is drawn on.
+
+   Colours are written as literal ARGB so a tint and its 12%-opacity wash stay
+   in step; deriving the wash with .withOpacity at each call site drifts."
   (:require ["package:flutter/material.dart" :as m]))
 
 (def font-family "OyunQaganTig")
 
-(def bg (m/Color 0xFF121212))
-(def surface (m/Color 0xFF1E1E1E))
-(def ink (m/Color 0xFFF5F5F5))
-(def ink-muted (m/Color 0xFFD0D0D0))
-(def ink-faint (m/Color 0x99FFFFFF))
-(def accent (m/Color 0xFF64B5F6))
-(def divider (m/Color 0x22FFFFFF))
-(def danger (m/Color 0xFFEF9A9A))
+;; --- Surfaces --------------------------------------------------------------
+
+(def bg (m/Color 0xFF0D1017))
+;; The far end of the page gradient — barely lighter, enough to give the very
+;; long horizontal scrolls somewhere to travel.
+(def bg-tint (m/Color 0xFF141A26))
+(def surface (m/Color 0xFF161C26))
+(def surface-alt (m/Color 0xFF1C2430))
+(def surface-hi (m/Color 0xFF232C3B))
+
+(def ink (m/Color 0xFFF1F4F9))
+(def ink-muted (m/Color 0xFFA7B2C4))
+(def ink-faint (m/Color 0xFF7A8697))
+
+(def divider (m/Color 0x14FFFFFF))
+(def divider-strong (m/Color 0x26FFFFFF))
+
+;; --- Accents ---------------------------------------------------------------
+
+(def accent (m/Color 0xFF7CA9FF))
+(def accent-deep (m/Color 0xFF5C7CF0))
+(def accent-soft (m/Color 0x1F7CA9FF))
+(def gold (m/Color 0xFFF0B274))
+(def gold-soft (m/Color 0x1FF0B274))
+(def jade (m/Color 0xFF6FD3A8))
+(def jade-soft (m/Color 0x1F6FD3A8))
+(def violet (m/Color 0xFFB39BF5))
+(def violet-soft (m/Color 0x1FB39BF5))
+(def danger (m/Color 0xFFF58A8A))
+(def danger-soft (m/Color 0x1FF58A8A))
+
+(def transparent m.Colors/transparent)
+
+;; --- Shape -----------------------------------------------------------------
+
+(def radius-sm 10.0)
+(def radius-md 16.0)
+(def radius-lg 22.0)
+(def radius-pill 999.0)
+
+(defn r [x] (m.BorderRadius/circular (double x)))
+
+(def card-shadow
+  [(m/BoxShadow .color (m/Color 0x59000000) .blurRadius 20.0
+                .offset (m/Offset 0.0 10.0))])
+
+(def soft-shadow
+  [(m/BoxShadow .color (m/Color 0x33000000) .blurRadius 12.0
+                .offset (m/Offset 0.0 4.0))])
+
+;; --- Content tones ---------------------------------------------------------
+;; Each kind of content carries one hue through badges, card spines and icons,
+;; so a strip of mixed results stays readable at a glance.
+
+(def tones
+  {:article {:color accent :wash accent-soft :icon m.Icons/article_outlined :label "Article"}
+   :question {:color gold :wash gold-soft :icon m.Icons/help_outline :label "Question"}
+   :answer {:color jade :wash jade-soft :icon m.Icons/forum_outlined :label "Answer"}
+   :tag {:color violet :wash violet-soft :icon m.Icons/tag :label "Tag"}})
+
+(defn tone [t]
+  (get tones t {:color accent :wash accent-soft
+                :icon m.Icons/description_outlined
+                :label (if t (str (name t)) "")}))
+
+;; --- Type ------------------------------------------------------------------
 
 (defn text
   ([size] (text size ink))
@@ -25,16 +86,45 @@
    .useMaterial3 true
    .brightness m.Brightness/dark
    .fontFamily font-family
-   .primarySwatch m.Colors/blue
    .scaffoldBackgroundColor bg
+   .canvasColor bg
    .colorScheme (m.ColorScheme/fromSeed
                  .seedColor accent
                  .brightness m.Brightness/dark)
    .appBarTheme (m/AppBarTheme
-                 .backgroundColor surface
+                 .backgroundColor transparent
+                 .surfaceTintColor transparent
                  .foregroundColor ink
-                 .elevation 0.0)
+                 .elevation 0.0
+                 .scrolledUnderElevation 0.0)
    .dividerColor divider
-   .iconTheme (m/IconThemeData .color ink .size 22.0)
+   .iconTheme (m/IconThemeData .color ink-muted .size 22.0)
+   .splashColor accent-soft
+   .highlightColor (m/Color 0x0FFFFFFF)
+   .progressIndicatorTheme (m/ProgressIndicatorThemeData .color accent)
+   .dialogTheme (m/DialogThemeData
+                 .backgroundColor surface
+                 .surfaceTintColor transparent
+                 .shape (m/RoundedRectangleBorder .borderRadius (r radius-lg)))
+   .navigationBarTheme (m/NavigationBarThemeData
+                        .backgroundColor surface
+                        .indicatorColor accent-soft
+                        .elevation 0.0)
+   .elevatedButtonTheme
+   (m/ElevatedButtonThemeData
+    .style (m.ElevatedButton/styleFrom
+            .backgroundColor accent
+            .foregroundColor bg
+            .elevation 0.0
+            .padding (m.EdgeInsets/symmetric .horizontal 16.0 .vertical 20.0)
+            .shape (m/RoundedRectangleBorder .borderRadius (r radius-md))))
+   .textButtonTheme
+   (m/TextButtonThemeData
+    .style (m.TextButton/styleFrom
+            .foregroundColor accent
+            .padding (m.EdgeInsets/symmetric .horizontal 10.0 .vertical 12.0)
+            .shape (m/RoundedRectangleBorder .borderRadius (r radius-sm))))
    .textTheme (m/TextTheme
-               .bodyMedium (text 16.0 ink))))
+               .bodyMedium (text 16.0 ink)
+               .bodySmall (text 13.0 ink-muted)
+               .titleMedium (text 18.0 ink))))

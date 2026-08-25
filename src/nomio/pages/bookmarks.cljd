@@ -1,11 +1,19 @@
 (ns nomio.pages.bookmarks
-  (:require [nomio.core.api :as api]
+  (:require ["package:flutter/material.dart" :as m]
+            [cljd.flutter :as f]
+            [nomio.core.api :as api]
             [nomio.state.store :as store]
+            [nomio.theme :as theme]
             [nomio.widgets.content-card :as cards]
             [nomio.widgets.paged :as paged]
             [nomio.widgets.sign-in :as sign-in]))
 
 (defn page []
-  (if-not (store/signed-in?)
-    (sign-in/prompt "Sign in to see your bookmarks")
-    (paged/list-page "Bookmarks" api/bookmarks cards/card)))
+  (f/widget
+   :watch [{:keys [user]} store/session]
+   (if-not user
+     (sign-in/prompt "Sign in to see your bookmarks")
+     (paged/list-page "Bookmarks" api/bookmarks cards/card
+                      :icon m.Icons/bookmark_rounded
+                      :tone theme/gold
+                      :subtitle "Saved for later"))))

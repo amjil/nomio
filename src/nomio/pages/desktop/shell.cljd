@@ -3,7 +3,8 @@
             [cljd.flutter :as f]
             [nomio.state.store :as store]
             [nomio.theme :as theme]
-            [nomio.widgets.side-nav :as side-nav]))
+            [nomio.widgets.side-nav :as side-nav]
+            [nomio.widgets.ui :as ui]))
 
 (defn desktop-shell [body-for]
   (f/widget
@@ -16,12 +17,12 @@
     (m/Row
      .children
      [(side-nav/rail)
-      (m/VerticalDivider .width 1.0 .thickness 1.0 .color theme/divider)
       (m/Expanded
        .child
-       (m/AnimatedSwitcher
-        .duration (dart:core/Duration. .milliseconds 200)
-        .child
-        (m/KeyedSubtree
-         .key (m/ValueKey nav-id)
-         .child (body-for nav-id))))]))))
+       (ui/backdrop
+        (m/AnimatedSwitcher
+         .duration (dart:core/Duration. .milliseconds 220)
+         .child
+         (m/KeyedSubtree
+          .key (m/ValueKey nav-id)
+          .child (body-for nav-id)))))]))))

@@ -12,12 +12,14 @@
             [nomio.pages.create :as create]
             [nomio.state.store :as store]
             [nomio.theme :as theme]
-            [nomio.widgets.mongol :as mg]))
+            [nomio.widgets.ui :as ui]))
 
 (defn- segs [name]
   (vec (remove empty? (str/split (or name "") #"/"))))
 
-(def ^:private shell-tabs
+;; Not ^:private: ClojureDart versions private defs (shell_tabs$vN) on reload,
+;; and MaterialPageRoute.builder would keep calling the old getter.
+(def shell-tabs
   {"/explore" "explore"
    "/articles" "articles"
    "/articles/latest" "articles"
@@ -32,7 +34,7 @@
 
 ;; /questions/latest stays routable for old links, but the feed is already
 ;; newest-first, so it lands on the same filter as /questions.
-(def ^:private questions-filters
+(def questions-filters
   {"/questions" :all
    "/questions/latest" :all
    "/questions/unanswered" :unanswered})
@@ -40,12 +42,50 @@
 (defn- not-found [name]
   (m/Scaffold
    .backgroundColor theme/bg
-   .appBar (m/AppBar .title (mg/text "404"))
-   .body (m/Center .child (mg/text (str name)))))
+   .body
+   (ui/backdrop
+    (ui/state-view {:icon m.Icons/explore_off_outlined
+                    :title "Nothing at this address"
+                    :message (str name)
+                    :action-label "Home"
+                    :action-icon m.Icons/home_rounded
+                    :on-action #(store/push-named! "/")}))))
+
+(defn page-for
+  "Widget for a route name. Public so hot reload replaces this function in
+   place instead of leaving an already-built route builder on a dead $vN getter."
+  [n]
+  (let [parts (segs n)]
+    (cond
+      (or (nil? n) (= n "/")) (shell/app-shell)
+      (contains? shell-tabs n) (shell/app-shell)
+      (= n "/login") (auth/login-screen)
+      (= n "/register") (auth/register-screen)
+      (= n "/create") (m/Scaffold .backgroundColor theme/bg
+                                  .body (ui/backdrop (create/page)))
+      (= n "/create/article") (create/page)
+      (= n "/create/question") (create/page)
+      (= n "/tags") (m/Scaffold .backgroundColor theme/bg
+                                .body (ui/backdrop (tags/page)))
+      (and (= (count parts) 2) (= (first parts) "articles"))
+      (article/screen (second parts))
+      (and (= (count parts) 2) (= (first parts) "questions"))
+      (question/screen (second parts))
+      (and (= (count parts) 3) (= (first parts) "questions") (= (nth parts 2) "edit"))
+      (write/screen (second parts))
+      (and (= (count parts) 2) (= (first parts) "answers"))
+      (answer/screen (second parts))
+      (and (= (count parts) 2) (= (first parts) "users"))
+      (m/Scaffold .backgroundColor theme/bg
+                  .body (ui/backdrop (profile/page (second parts))))
+      (and (= (count parts) 2) (= (first parts) "tags"))
+      (tags/tag-screen (second parts))
+      (and (= (count parts) 3) (= (first parts) "content") (= (nth parts 2) "edit"))
+      (write/screen (second parts))
+      :else (not-found n))))
 
 (defn ^m/Route generate-route [^m/RouteSettings settings]
-  (let [n (.-name settings)
-        parts (segs n)]
+  (let [n (.-name settings)]
     ;; Shell state is selected here rather than inside .builder: the builder runs
     ;; during the build phase, and these atoms are watched by a mounted shell.
     (when-let [tab (get shell-tabs n)]
@@ -55,28 +95,4 @@
     (m/MaterialPageRoute
      .settings settings
      .builder
-     (fn [_]
-       (cond
-         (or (nil? n) (= n "/")) (shell/app-shell)
-         (contains? shell-tabs n) (shell/app-shell)
-         (= n "/login") (auth/login-screen)
-         (= n "/register") (auth/register-screen)
-         (= n "/create") (m/Scaffold .body (create/page))
-         (= n "/create/article") (create/page)
-         (= n "/create/question") (create/page)
-         (= n "/tags") (m/Scaffold .body (tags/page))
-         (and (= (count parts) 2) (= (first parts) "articles"))
-         (article/screen (second parts))
-         (and (= (count parts) 2) (= (first parts) "questions"))
-         (question/screen (second parts))
-         (and (= (count parts) 3) (= (first parts) "questions") (= (nth parts 2) "edit"))
-         (write/screen (second parts))
-         (and (= (count parts) 2) (= (first parts) "answers"))
-         (answer/screen (second parts))
-         (and (= (count parts) 2) (= (first parts) "users"))
-         (m/Scaffold .body (profile/page (second parts)))
-         (and (= (count parts) 2) (= (first parts) "tags"))
-         (tags/tag-screen (second parts))
-         (and (= (count parts) 3) (= (first parts) "content") (= (nth parts 2) "edit"))
-         (write/screen (second parts))
-         :else (not-found n))))))
+     (fn [_] (page-for n)))))

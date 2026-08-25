@@ -8,131 +8,122 @@
             [nomio.theme :as theme]
             [nomio.widgets.async :as asy]
             [nomio.widgets.comments :as comments]
+            [nomio.widgets.keyboard :as kb]
             [nomio.widgets.mongol :as mg]
-            [nomio.widgets.toast :as toast]))
+            [nomio.widgets.reader-frame :as frame]
+            [nomio.widgets.toast :as toast]
+            [nomio.widgets.ui :as ui]))
 
-(defn- vote-col [a !a ctx]
+(defn- cast-vote! [ctx !a a dir]
+  (store/require-auth!
+   (fn []
+     (-> (if (= (:my-vote a) dir)
+           (api/unvote! (:id a))
+           (api/vote! (:id a) dir))
+         (.then (fn [res]
+                  (when (.-mounted ^m/BuildContext ctx)
+                    (swap! !a assoc
+                           :my-vote (:my-vote res)
+                           :vote-score (:vote-score res)))
+                  nil))
+         (.catchError (fn [e]
+                        (when (.-mounted ^m/BuildContext ctx)
+                          (toast/error! ctx e))
+                        nil)))))
+  nil)
+
+(defn- vote-box [a !a ctx]
   (let [score (or (:vote-score a) 0)
         mine (:my-vote a)]
+    (ui/panel
+     {:pad (m.EdgeInsets/symmetric .horizontal 8.0 .vertical 10.0)
+      :radius theme/radius-lg
+      :color theme/surface}
+     (m/Column
+      .mainAxisSize m.MainAxisSize/min
+      .crossAxisAlignment m.CrossAxisAlignment/center
+      .children
+      [(ui/icon-button {:icon m.Icons/keyboard_arrow_up_rounded
+                        :size 32.0
+                        :active? (= mine 1)
+                        :on-tap #(cast-vote! ctx !a a 1)})
+       (ui/gap-v 8)
+       (mg/text (str score) {:size 15.0 :weight m.FontWeight/w700})
+       (ui/gap-v 8)
+       (ui/icon-button {:icon m.Icons/keyboard_arrow_down_rounded
+                        :size 32.0
+                        :active? (= mine -1)
+                        :on-tap #(cast-vote! ctx !a a -1)})]))))
+
+(defn- parent-link [q]
+  (if-not q
+    ui/nothing
     (m/Column
      .mainAxisSize m.MainAxisSize/min
+     .crossAxisAlignment m.CrossAxisAlignment/start
      .children
-     [(m/IconButton
-       .icon (m/Icon m.Icons/keyboard_arrow_up
-                     .color (when (= mine 1) theme/accent))
-       .onPressed
-       (fn []
-         (store/require-auth!
-          (fn []
-            (-> (if (= mine 1)
-                  (api/unvote! (:id a))
-                  (api/vote! (:id a) 1))
-                (.then (fn [res]
-                         (when (.-mounted ^m/BuildContext ctx)
-                           (swap! !a assoc
-                                  :my-vote (:my-vote res)
-                                  :vote-score (:vote-score res)))
-                         nil))
-                (.catchError (fn [e]
-                               (when (.-mounted ^m/BuildContext ctx)
-                                 (toast/error! ctx e))
-                               nil)))))))
-      (mg/text (str score) {:size 16.0})
-      (m/IconButton
-       .icon (m/Icon m.Icons/keyboard_arrow_down
-                     .color (when (= mine -1) theme/accent))
-       .onPressed
-       (fn []
-         (store/require-auth!
-          (fn []
-            (-> (if (= mine -1)
-                  (api/unvote! (:id a))
-                  (api/vote! (:id a) -1))
-                (.then (fn [res]
-                         (when (.-mounted ^m/BuildContext ctx)
-                           (swap! !a assoc
-                                  :my-vote (:my-vote res)
-                                  :vote-score (:vote-score res)))
-                         nil))
-                (.catchError (fn [e]
-                               (when (.-mounted ^m/BuildContext ctx)
-                                 (toast/error! ctx e))
-                               nil)))))))])))
+     [(mg/label "Question")
+      (ui/gap-v 10)
+      (ui/tappable
+       #(store/push-named! (str "/questions/" (or (:slug q) (:id q))))
+       theme/radius-sm
+       (m/Padding
+        .padding (m.EdgeInsets/symmetric .horizontal 2.0 .vertical 4.0)
+        .child (mg/text (or (:title q) "")
+                        {:size 14.0 :color theme/gold :max-lines 3})))])))
 
 (defn- screen* [a q]
   (f/widget
    :context ctx
    :get [m/Navigator]
+   :managed [_ime-control (kb/install)
+             :dispose kb/restore-ime!]
    :let [!a (atom a)
          !comments (asy/load! ctx (api/comments "answer" (:id a)))
          !reply (atom nil)]
    :watch [ans !a]
    (m/Scaffold
     .backgroundColor theme/bg
-    .appBar
-    (m/AppBar
-     .leading (m/IconButton
-               .icon (m/Icon m.Icons/arrow_back)
-               .onPressed #(.pop navigator))
-     .actions
-     [(if (= (:id (store/current-user)) (:author-id ans))
-        (m/IconButton
-         .icon (m/Icon m.Icons/edit)
-         .onPressed #(store/push-named! (str "/content/" (:id ans) "/edit")))
-        (m/SizedBox.shrink))])
+    .resizeToAvoidBottomInset false
     .body
-    (m/SafeArea
-     .child
-     (m/Row
-      .crossAxisAlignment m.CrossAxisAlignment/start
-      .children
-      [;; --- 1. Left meta: no fixed width; natural size + spacing ---
-       (m/Padding
-        .padding (m.EdgeInsets/all 16.0)
-        .child
-        (m/Column
-         .mainAxisSize m.MainAxisSize/min
-         .children
-         [(mg/muted "Question")
-          (m/GestureDetector
-           .onTap (when q
-                    #(store/push-named! (str "/questions/" (or (:slug q) (:id q)))))
-           .child (mg/text (or (:title q) "") {:size 16.0}))
-          (m/SizedBox .height 16.0)
-          (mg/text "Answer" {:size 14.0 :color theme/accent})
-          (mg/muted (or (get-in ans [:author :display-name]) ""))
-          (m/SizedBox .height 12.0)
-          (vote-col ans !a ctx)]))
-       
-       ;; --- 2. Middle: answer body (.flex 3) ---
-       (m/Expanded .flex 3 .child (nreader/widget (:document ans)))
-       
-       ;; --- 3. Right comments: .flex 2 instead of fixed width ---
-       (m/Expanded
-        .flex 2
-        .child
-        (m/Column
-         .children
-         [;; Top: comment list, ~2/3 of vertical space
-          (m/Expanded
-           .flex 2
-           .child (asy/view !comments
-                            #(comments/tree % (fn [pid] (reset! !reply pid) nil))))
-          
-          ;; Bottom: composer needs bounded height (contains Expanded).
-          ;; Expanded takes ~1/3 remaining height (replaces hardcoded height 160.0)
-          (m/Expanded
-           .flex 1
-           .child 
-           (m/Padding
-            .padding (m.EdgeInsets/only .bottom 16.0)
-            .child
-            (comments/composer
-             :answer (:id ans)
-             :!reply-to !reply
-             :on-posted (fn []
-                          (asy/load! ctx !comments (api/comments "answer" (:id ans)))
-                          nil))))]))])))))
+    (ui/backdrop
+     (m/SafeArea
+      .child
+      (kb/wrap
+       (m/Row
+        .crossAxisAlignment m.CrossAxisAlignment/stretch
+        .children
+        [(frame/meta-aside
+          {:content ans
+           :on-back #(.pop navigator)
+           :actions
+           [(when (= (:id (store/current-user)) (:author-id ans))
+              {:icon m.Icons/edit_outlined
+               :on-tap #(store/push-named! (str "/content/" (:id ans) "/edit"))})]
+           :extra (m/Column
+                   .mainAxisSize m.MainAxisSize/min
+                   .crossAxisAlignment m.CrossAxisAlignment/start
+                   .children
+                   [(vote-box ans !a ctx)
+                    (ui/gap-v 18)
+                    (parent-link q)])})
+
+         (m/Expanded
+          .flex 3
+          .child (frame/paper (nreader/widget (:document ans))))
+
+         (m/Expanded
+          .flex 2
+          .child
+          (frame/comments-pane
+           (asy/view !comments
+                     #(comments/tree % (fn [pid] (reset! !reply pid) nil)))
+           (comments/composer
+            :answer (:id ans)
+            :!reply-to !reply
+            :on-posted (fn []
+                         (asy/load! ctx !comments (api/comments "answer" (:id ans)))
+                         nil))))])))))))
 
 (defn- fetch
   "An answer plus its parent question. A missing question still renders the

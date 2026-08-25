@@ -9,8 +9,8 @@
             [cljd.flutter :as f]
             [nomio.theme :as theme]
             [nomio.widgets.async :as asy]
-            [nomio.widgets.mongol :as mg]
-            [nomio.widgets.refresh :as rfr]))
+            [nomio.widgets.refresh :as rfr]
+            [nomio.widgets.ui :as ui]))
 
 (def ^:private page-size 20)
 
@@ -59,6 +59,7 @@
     (assoc st
            :status :ok
            :error nil
+           :failed nil
            :items (into (:items st) fresh)
            :offset (+ (:offset st) (count items))
            :done? (ended? page fresh (count items)))))
@@ -84,7 +85,7 @@
                    nil))
           (.catchError (fn [e]
                          (when (current? ctx !st gen)
-                           (swap! !st assoc :status :error :error e))
+                           (swap! !st assoc :status :error :error e :failed :paging))
                          nil))))))
 
 (defn reload!
@@ -107,7 +108,7 @@
                  nil))
         (.catchError (fn [e]
                        (when (current? ctx !st g)
-                         (swap! !st assoc :status :error :error e))
+                         (swap! !st assoc :status :error :error e :failed :refresh))
                        nil)))))
 
 (defn- near-end? [^m/ScrollController ctrl]
@@ -134,31 +135,27 @@
    with no cards to drag there would otherwise be no way to refetch at all —
    and a screen like /tags/:slug has no heading button to fall back on."
   [retry]
-  (m/Center
-   .child
-   (m/Row
-    .mainAxisSize m.MainAxisSize/min
-    .children
-    [(mg/muted "Nothing here yet")
-     (m/IconButton
-      .icon (m/Icon m.Icons/refresh .color theme/accent)
-      .onPressed retry)])))
+  (ui/state-view {:icon m.Icons/inbox_outlined
+                  :title "Nothing here yet"
+                  :message "Pull the strip to the right to look again"
+                  :action-label "Reload"
+                  :on-action retry}))
 
 (defn- trailer [st retry]
   (cond
     (= :paging (:status st))
     (m/Padding
-     .padding (m.EdgeInsets/symmetric .horizontal 24.0)
-     .child (m/Center .child (m/SizedBox .width 20.0 .height 20.0
-                                         .child (m/CircularProgressIndicator .strokeWidth 2.0))))
+     .padding (m.EdgeInsets/symmetric .horizontal 28.0)
+     .child (ui/spinner))
 
     (= :error (:status st))
     (m/Padding
-     .padding (m.EdgeInsets/symmetric .horizontal 16.0)
+     .padding (m.EdgeInsets/symmetric .horizontal 20.0)
      .child (m/Center
-             .child (m/IconButton
-                     .icon (m/Icon m.Icons/refresh)
-                     .onPressed retry)))
+             .child (ui/ghost-action {:label "Retry"
+                                      :icon m.Icons/refresh_rounded
+                                      :tone theme/danger
+                                      :on-tap retry})))
 
     :else (m/SizedBox.shrink)))
 
@@ -176,13 +173,19 @@
          ;; while there is something to put in it.
          tail? (contains? #{:paging :error} (:status st))
          more! (fn [] (load-more! ctx !st fetch) nil)
-         again! (fn [] (reload! ctx !st fetch) nil)]
+         again! (fn [] (reload! ctx !st fetch) nil)
+         ;; A failed pull-to-refresh must retry that refresh, not page-2:
+         ;; load-more! is a no-op when the feed was already done.
+         retry-tail! (fn []
+                       (if (= :refresh (:failed st))
+                         (do (refresh! ctx !st fetch) nil)
+                         (more!)))]
      (cond
        (and (empty? items) (= :error (:status st)))
        (asy/view !st (fn [_] (asy/empty-state)) :retry again!)
 
        (empty? items)
-       (if (= :loading (:status st)) (asy/spinner) (vacant again!))
+       (if (= :loading (:status st)) (ui/skeleton-strip) (vacant again!))
 
        :else
        (rfr/strip
@@ -191,7 +194,7 @@
          :item-builder (fn [_ i]
                          (if (< (int i) n)
                            (card-fn (nth items (int i)))
-                           (trailer st more!)))
+                           (trailer st retry-tail!)))
          :on-refresh (fn [] (refresh! ctx !st fetch))})))))
 
 (defn section
@@ -199,31 +202,25 @@
    asy/section."
   [aside !st fetch card-fn]
   (m/Row
-   .crossAxisAlignment m.CrossAxisAlignment/start
+   .crossAxisAlignment m.CrossAxisAlignment/stretch
    .children
    [(m/Padding
-     .padding (m.EdgeInsets/all 16.0)
+     .padding (m.EdgeInsets/fromLTRB 20.0 24.0 12.0 24.0)
      .child aside)
     (m/Expanded .child (strip !st fetch card-fn))]))
 
-(defn- heading
-  "Pointer users have no pull gesture, so the title doubles as a refresh button."
-  [title on-reload]
-  (m/Column
-   .mainAxisSize m.MainAxisSize/min
-   .children
-   [(mg/text title {:size 20.0 :weight m.FontWeight/bold})
-    (m/SizedBox .height 12.0)
-    (m/IconButton
-     .icon (m/Icon m.Icons/refresh)
-     .onPressed on-reload)]))
-
 (defn list-page
-  "Heading beside a paginated strip — the paged counterpart of asy/list-page."
-  [title fetch card-fn]
+  "Heading beside a paginated strip — the paged counterpart of asy/list-page.
+   Pointer users have no pull gesture, so the header carries a refresh button."
+  [title fetch card-fn & {:keys [icon tone subtitle]}]
   (f/widget
    :context ctx
    :let [!st (state)
          _ (load-more! ctx !st fetch)]
-   (section (heading title (fn [] (reload! ctx !st fetch) nil))
+   (section (ui/page-header
+             {:title title
+              :subtitle subtitle
+              :icon (or icon m.Icons/layers_outlined)
+              :tone (or tone theme/accent)
+              :on-refresh (fn [] (reload! ctx !st fetch) nil)})
             !st fetch card-fn)))

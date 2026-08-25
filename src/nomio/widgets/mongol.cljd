@@ -1,18 +1,43 @@
 (ns nomio.widgets.mongol
+  "Vertical-script text helpers. Every string the reader sees goes through here
+   so weight, colour and clamping stay consistent across screens."
   (:require ["package:flutter/material.dart" :as m]
             ["package:mongol/mongol.dart" :as mgl]
             [nomio.theme :as theme]))
 
 (defn text
   ([s] (text s {}))
-  ([s {:keys [size color weight]
+  ([s {:keys [size color weight max-lines align height spacing]
        :or {size 16.0 color theme/ink}}]
    (mgl/MongolText
     (or s "")
+    .maxLines (when max-lines (int max-lines))
+    ;; A clamped column has to say so, or the last line is simply cut mid-glyph.
+    .overflow (when max-lines m.TextOverflow/ellipsis)
+    .textAlign align
     .style (m/TextStyle .fontSize (double size)
                         .color color
                         .fontWeight weight
+                        .height (when height (double height))
+                        .letterSpacing (when spacing (double spacing))
                         .fontFamily theme/font-family))))
 
-(defn muted [s]
-  (text s {:size 13.0 :color theme/ink-faint}))
+(defn title
+  ([s] (title s 20.0))
+  ([s size]
+   (text s {:size size :weight m.FontWeight/w700 :height 1.15})))
+
+(defn body [s]
+  (text s {:size 15.0 :color theme/ink-muted :height 1.25}))
+
+(defn muted
+  ([s] (muted s 13.0))
+  ([s size] (text s {:size size :color theme/ink-faint})))
+
+(defn label
+  "Small all-caps-feeling caption used on badges and section headers."
+  ([s] (label s theme/ink-faint))
+  ([s color] (text s {:size 11.5 :color color :weight m.FontWeight/w600 :spacing 0.6})))
+
+(defn centered [s opts]
+  (text s (assoc opts :align mgl.MongolTextAlign/center)))

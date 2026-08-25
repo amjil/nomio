@@ -3,32 +3,56 @@
             ["package:flutter/services.dart" :as s]
             [cljd.flutter :as f]
             [nomio.state.store :as store]
-            [nomio.widgets.side-nav :as side]))
+            [nomio.theme :as theme]
+            [nomio.widgets.side-nav :as side]
+            [nomio.widgets.ui :as ui]))
 
 (def ^:private nearest-tab
-  "Desktop has more destinations than the bottom bar. NavigationBar cannot show
+  "Desktop has more destinations than the bottom bar. The bar cannot show
    'nothing selected', so routes without their own tab highlight a relative."
   {"articles" "explore"
    "questions" "explore"
    "search" "explore"
    "bookmarks" "profile"})
 
+;; Icons only: a vertical-script label under each one would double the bar's
+;; height, and these five glyphs are conventional enough to stand alone.
+(defn- destination [{:keys [id icon selected-icon]} active?]
+  (ui/tappable
+   (fn []
+     (s/HapticFeedback.mediumImpact)
+     (store/set-nav! id))
+   theme/radius-pill
+   (m/AnimatedContainer
+    .duration (dart:core/Duration. .milliseconds 180)
+    .padding (m.EdgeInsets/symmetric .horizontal 20.0 .vertical 9.0)
+    .decoration (m/BoxDecoration
+                 .color (if active? theme/accent-soft theme/transparent)
+                 .borderRadius (theme/r theme/radius-pill))
+    .child (m/Icon (if active? selected-icon icon)
+                   .size 23.0
+                   .color (if active? theme/accent theme/ink-faint)))))
+
 (defn bar []
   (f/widget
    :watch [nav-id (f/sub store/app-ui :selected-nav-id)]
    (let [tabs side/mobile-tabs
-         wanted (get nearest-tab nav-id nav-id)
-         idx (or (first (keep-indexed (fn [i t] (when (= (:id t) wanted) i)) tabs)) 0)]
-     (m/NavigationBar
-      .selectedIndex (int idx)
-      .onDestinationSelected
-      (fn [i]
-        (s/HapticFeedback.mediumImpact)
-        (store/set-nav! (:id (nth tabs (int i)))))
-      .destinations
-      (mapv (fn [{:keys [icon selected-icon label]}]
-              (m/NavigationDestination
-               .icon (m/Icon icon)
-               .selectedIcon (m/Icon selected-icon)
-               .label label))
-            tabs)))))
+         wanted (get nearest-tab nav-id nav-id)]
+     (m/Container
+      .decoration (m/BoxDecoration
+                   .color theme/surface
+                   .border (m/Border .top (m/BorderSide .color theme/divider .width 1.0))
+                   .boxShadow [(m/BoxShadow .color (m/Color 0x4D000000)
+                                            .blurRadius 18.0
+                                            .offset (m/Offset 0.0 -6.0))])
+      .child
+      (m/SafeArea
+       .top false
+       .child
+       (m/Padding
+        .padding (m.EdgeInsets/symmetric .horizontal 8.0 .vertical 9.0)
+        .child
+        (m/Row
+         .mainAxisAlignment m.MainAxisAlignment/spaceAround
+         .children
+         (mapv (fn [t] (destination t (= (:id t) wanted))) tabs))))))))

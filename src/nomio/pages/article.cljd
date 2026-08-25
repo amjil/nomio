@@ -1,15 +1,16 @@
 (ns nomio.pages.article
   (:require ["package:flutter/material.dart" :as m]
             [cljd.flutter :as f]
-            [clojure.string :as str]
             [nomio.content.reader :as nreader]
             [nomio.core.api :as api]
             [nomio.state.store :as store]
             [nomio.theme :as theme]
             [nomio.widgets.async :as asy]
             [nomio.widgets.comments :as comments]
-            [nomio.widgets.mongol :as mg]
-            [nomio.widgets.toast :as toast]))
+            [nomio.widgets.keyboard :as kb]
+            [nomio.widgets.reader-frame :as frame]
+            [nomio.widgets.toast :as toast]
+            [nomio.widgets.ui :as ui]))
 
 (defn- open-link [target]
   (let [title (if (map? target) (:title target) (str target))]
@@ -18,10 +19,42 @@
         (store/open-content! hit))))
   nil)
 
+(defn- toggle-like! [ctx !c content liked?]
+  (store/require-auth!
+   (fn []
+     (-> (api/toggle-like! (:id content) liked?)
+         (.then (fn [res]
+                  (when (.-mounted ^m/BuildContext ctx)
+                    (swap! !c assoc
+                           :liked (:liked res)
+                           :like-count (:like-count res)))
+                  nil))
+         (.catchError (fn [e]
+                        (when (.-mounted ^m/BuildContext ctx)
+                          (toast/error! ctx e))
+                        nil)))))
+  nil)
+
+(defn- toggle-bookmark! [ctx !c content]
+  (store/require-auth!
+   (fn []
+     (-> (api/toggle-bookmark! (:id content))
+         (.then (fn [bm]
+                  (when (.-mounted ^m/BuildContext ctx)
+                    (swap! !c assoc :bookmarked bm))
+                  nil))
+         (.catchError (fn [e]
+                        (when (.-mounted ^m/BuildContext ctx)
+                          (toast/error! ctx e))
+                        nil)))))
+  nil)
+
 (defn- screen* [c]
   (f/widget
    :context ctx
    :get [m/Navigator]
+   :managed [_ime-control (kb/install)
+             :dispose kb/restore-ime!]
    :let [!c (atom c)
          !comments (asy/load! ctx (api/comments "article" (:id c)))
          !reply (atom nil)]
@@ -31,102 +64,47 @@
          bookmarked? (api/bookmarked? content)]
      (m/Scaffold
       .backgroundColor theme/bg
-      .appBar
-      (m/AppBar
-       .leading (m/IconButton
-                 .icon (m/Icon m.Icons/arrow_back)
-                 .onPressed #(.pop navigator))
-       .actions
-       [(if mine?
-          (m/IconButton
-           .icon (m/Icon m.Icons/edit)
-           .onPressed #(store/push-named! (str "/content/" (:id content) "/edit")))
-          (m/SizedBox.shrink))
-        (m/IconButton
-         .icon (m/Icon (if liked? m.Icons/favorite m.Icons/favorite_border)
-                       .color (when liked? theme/accent))
-         .onPressed
-         (fn []
-           (store/require-auth!
-            (fn []
-              (-> (api/toggle-like! (:id content) liked?)
-                  (.then (fn [res]
-                           (when (.-mounted ^m/BuildContext ctx)
-                             (swap! !c assoc
-                                    :liked (:liked res)
-                                    :like-count (:like-count res)))
-                           nil))
-                  (.catchError (fn [e]
-                                 (when (.-mounted ^m/BuildContext ctx)
-                                   (toast/error! ctx e))
-                                 nil)))))))
-        (m/IconButton
-         .icon (m/Icon (if bookmarked?
-                         m.Icons/bookmark
-                         m.Icons/bookmark_border))
-         .onPressed
-         (fn []
-           (store/require-auth!
-            (fn []
-              (-> (api/toggle-bookmark! (:id content))
-                  (.then (fn [bm]
-                           (when (.-mounted ^m/BuildContext ctx)
-                             (swap! !c assoc :bookmarked bm))
-                           nil))
-                  (.catchError (fn [e]
-                                 (when (.-mounted ^m/BuildContext ctx)
-                                   (toast/error! ctx e))
-                                 nil)))))))])
+      .resizeToAvoidBottomInset false
       .body
-      (m/SafeArea
-       .child
-       (m/Row
-        .crossAxisAlignment m.CrossAxisAlignment/start
-        .children
-        [;; --- 1. Left meta: no fixed width; natural size ---
-         (m/Padding
-          .padding (m.EdgeInsets/all 16.0)
-          .child
-          (m/Column
-           .mainAxisSize m.MainAxisSize/min
-           .crossAxisAlignment m.CrossAxisAlignment/start
-           .children
-           [(mg/text (or (:title content) "") {:size 20.0 :weight m.FontWeight/bold})
-            (m/SizedBox .height 12.0)
-            (mg/muted (or (get-in content [:author :display-name]) ""))
-            (if (seq (:tags content))
-              (m/GestureDetector
-               .onTap #(store/push-named! (str "/tags/" (first (:tags content))))
-               .child (mg/muted (str "#" (str/join " #" (:tags content)))))
-              (m/SizedBox.shrink))]))
+      (ui/backdrop
+       (m/SafeArea
+        .child
+        (kb/wrap
+         (m/Row
+          .crossAxisAlignment m.CrossAxisAlignment/stretch
+          .children
+          [(frame/meta-aside
+            {:content content
+             :on-back #(.pop navigator)
+             :on-tag #(store/push-named! (str "/tags/" (first (:tags content))))
+             :actions
+             [(when mine?
+                {:icon m.Icons/edit_outlined
+                 :on-tap #(store/push-named! (str "/content/" (:id content) "/edit"))})
+              {:icon (if liked? m.Icons/favorite_rounded m.Icons/favorite_border)
+               :active? liked?
+               :on-tap #(toggle-like! ctx !c content liked?)}
+              {:icon (if bookmarked? m.Icons/bookmark_rounded m.Icons/bookmark_border)
+               :active? bookmarked?
+               :on-tap #(toggle-bookmark! ctx !c content)}]})
 
-         ;; --- 2. Middle body: flex 3 ---
-         (m/Expanded
-          .flex 3
-          .child (nreader/widget (:document content) :on-link open-link))
+           (m/Expanded
+            .flex 3
+            .child (frame/paper (nreader/widget (:document content)
+                                                :on-link open-link)))
 
-         ;; --- 3. Right comments: flex 2, split internally ---
-         (m/Expanded
-          .flex 2
-          .child
-          (m/Column
-           .children
-           [(m/Expanded
-             .flex 2
-             .child (asy/view !comments
-                              #(comments/tree % (fn [pid] (reset! !reply pid) nil))))
-            (m/Expanded
-             .flex 1
-             .child
-             (m/Padding
-              .padding (m.EdgeInsets/only .bottom 16.0)
-              .child
-              (comments/composer
-               :article (:id content)
-               :!reply-to !reply
-               :on-posted (fn []
-                            (asy/load! ctx !comments (api/comments "article" (:id content)))
-                            nil))))]))]))))))
+           (m/Expanded
+            .flex 2
+            .child
+            (frame/comments-pane
+             (asy/view !comments
+                       #(comments/tree % (fn [pid] (reset! !reply pid) nil)))
+             (comments/composer
+              :article (:id content)
+              :!reply-to !reply
+              :on-posted (fn []
+                           (asy/load! ctx !comments (api/comments "article" (:id content)))
+                           nil))))])))))))) 
 
 (defn screen [slug]
   (f/widget

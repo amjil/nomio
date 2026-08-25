@@ -1,6 +1,5 @@
 (ns nomio.pages.notifications
   (:require ["package:flutter/material.dart" :as m]
-            ["package:mongol/mongol.dart" :as mgl]
             [cljd.flutter :as f]
             [nomio.core.api :as api]
             [nomio.state.store :as store]
@@ -8,7 +7,8 @@
             [nomio.widgets.async :as asy]
             [nomio.widgets.mongol :as mg]
             [nomio.widgets.sign-in :as sign-in]
-            [nomio.widgets.toast :as toast]))
+            [nomio.widgets.toast :as toast]
+            [nomio.widgets.ui :as ui]))
 
 (defn- open-note!
   "Marking read is best-effort — the reader is already on their way to the
@@ -23,60 +23,100 @@
         (.catchError (fn [_] nil))))
   nil)
 
+(def ^:private kind-icons
+  {"like" m.Icons/favorite_rounded
+   "follow" m.Icons/person_add_alt_1_rounded
+   "comment" m.Icons/mode_comment_outlined
+   "answer" m.Icons/forum_outlined
+   "mention" m.Icons/alternate_email_rounded})
+
 (defn- note-card [on-read n]
-  (m/InkWell
-   .onTap #(open-note! n on-read)
-   .child
-   (m/Container
-    .width 220.0
-    .margin (m.EdgeInsets/symmetric .horizontal 8.0 .vertical 12.0)
-    .padding (m.EdgeInsets/all 16.0)
-    .decoration (m/BoxDecoration
-                 .color (if (:read-at n) theme/surface theme/bg)
-                 .borderRadius (m.BorderRadius/circular 12.0)
-                 .border (m/Border.all .color theme/divider))
-    .child
-    (m/Column
-     .crossAxisAlignment m.CrossAxisAlignment/start
-     .children
-     [(mg/text (or (:title n) (:type n) "") {:size 15.0 :weight m.FontWeight/w600})
-      (m/SizedBox .height 8.0)
-      (m/Expanded .child (mg/muted (or (:excerpt n) "")))
-      (mg/muted (or (get-in n [:actor :display-name])
-                    (get-in n [:actor :username])
-                    ""))]))))
+  (let [unread? (nil? (:read-at n))
+        actor (or (get-in n [:actor :display-name])
+                  (get-in n [:actor :username])
+                  "")
+        excerpt (or (:excerpt n) "")]
+    (ui/panel
+     {:width 250.0
+      :margin (m.EdgeInsets/symmetric .horizontal 8.0 .vertical 14.0)
+      :pad 18.0
+      :radius theme/radius-lg
+      :color (if unread? theme/surface-alt theme/surface)
+      :border (if unread? theme/divider-strong theme/divider)
+      :shadow (when unread? theme/soft-shadow)
+      :on-tap #(open-note! n on-read)}
+     (m/Row
+      .crossAxisAlignment m.CrossAxisAlignment/stretch
+      .children
+      [(ui/spine (if unread? theme/accent theme/divider))
+       (ui/gap-h 14)
+       (ui/top
+        (m/Icon (get kind-icons (:type n) m.Icons/notifications_none)
+                .size 17.0
+                .color (if unread? theme/accent theme/ink-faint)))
+       (ui/gap-h 12)
+       (m/Expanded
+        .flex 3
+        .child (mg/text (or (:title n) (:type n) "")
+                        {:size 15.5
+                         :weight (if unread? m.FontWeight/w700 m.FontWeight/w500)
+                         :height 1.2
+                         :max-lines 3}))
+       (if (empty? excerpt) ui/nothing (ui/gap-h 8))
+       (if (empty? excerpt)
+         ui/nothing
+         (m/Expanded
+          .flex 2
+          .child (mg/text excerpt {:size 13.0 :color theme/ink-faint
+                                   :height 1.3 :max-lines 2})))
+       (if (empty? actor) ui/nothing (ui/gap-h 12))
+       (if (empty? actor)
+         ui/nothing
+         (m/SizedBox
+          .width 30.0
+          .child
+          (m/Column
+           .crossAxisAlignment m.CrossAxisAlignment/start
+           .children
+           [(ui/avatar actor 26.0)
+            (ui/gap-v 10)
+            (m/Flexible .child (mg/muted actor))])))]))))
 
 (defn- note-list [on-read items]
   (if (empty? items)
-    (asy/empty-state "No notifications")
+    (ui/state-view {:icon m.Icons/notifications_off_outlined
+                    :title "No notifications"
+                    :message "Replies, likes and follows land here"})
     (m/ListView
      .scrollDirection m.Axis/horizontal
      .padding (m.EdgeInsets/symmetric .horizontal 8.0)
      .children (mapv #(note-card on-read %) items))))
 
+(defn- mark-all! [ctx reload!]
+  (-> (api/mark-all-notifications-read!)
+      (.then (fn [_]
+               (when (.-mounted ^m/BuildContext ctx)
+                 (reload!)
+                 (toast/success! ctx "Marked as read"))
+               nil))
+      (.catchError (fn [e]
+                     (when (.-mounted ^m/BuildContext ctx)
+                       (toast/error! ctx e))
+                     nil)))
+  nil)
+
 (defn- aside [ctx data reload!]
-  (m/Column
-   .mainAxisSize m.MainAxisSize/min
-   .children
-   [(mg/text (str "Notifications"
-                  (when (pos? (or (:unread-count data) 0))
-                    (str " (" (:unread-count data) ")")))
-             {:size 16.0})
-    (m/SizedBox .height 12.0)
-    (mgl/MongolTextButton
-     .onPressed
-     (fn []
-       (-> (api/mark-all-notifications-read!)
-           (.then (fn [_]
-                    (when (.-mounted ^m/BuildContext ctx)
-                      (reload!)
-                      (toast/success! ctx "Marked as read"))
-                    nil))
-           (.catchError (fn [e]
-                          (when (.-mounted ^m/BuildContext ctx)
-                            (toast/error! ctx e))
-                          nil))))
-     .child (mg/muted "read all"))]))
+  (let [unread (or (:unread-count data) 0)]
+    (ui/page-header
+     {:title "Notifications"
+      :icon m.Icons/notifications_rounded
+      :subtitle (if (pos? unread) (str unread " unread") "All caught up")
+      :on-refresh reload!
+      :extra (when (pos? unread)
+               (ui/ghost-action {:label "Read all"
+                                 :icon m.Icons/done_all_rounded
+                                 :tone theme/accent
+                                 :on-tap #(mark-all! ctx reload!)}))})))
 
 (defn- swap-note
   "Drops the server's updated copy in place rather than refetching the list, so
@@ -101,6 +141,8 @@
                 :retry reload!)))
 
 (defn page []
-  (if-not (store/signed-in?)
-    (sign-in/prompt "Sign in to see notifications")
-    (signed-in-page)))
+  (f/widget
+   :watch [{:keys [user]} store/session]
+   (if-not user
+     (sign-in/prompt "Sign in to see notifications")
+     (signed-in-page))))

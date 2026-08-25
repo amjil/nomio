@@ -1,32 +1,68 @@
 (ns nomio.pages.auth
   (:require ["package:flutter/material.dart" :as m]
-            ["package:mongol/mongol.dart" :as mgl]
             [cljd.flutter :as f]
             [clojure.string :as str]
             [nomio.core.api :as api]
-            [nomio.platform :as platform]
             [nomio.theme :as theme]
             [nomio.widgets.keyboard :as kb]
             [nomio.widgets.mongol :as mg]
             [nomio.widgets.toast :as toast]
+            [nomio.widgets.ui :as ui]
             [rich-editor.components.text-field :as custom-tf]))
 
 (defonce ^:private !ime (atom {:external-keyboard-delegate nil}))
 
-(defn- field [ctrl focus hint obscure?]
-  ;; Drop hardcoded Container width; keep reasonable padding
-  (m/Padding
-   .padding (m.EdgeInsets/symmetric .horizontal 8.0)
+;; The card is bounded so the vertical text field has a height to fill. Left
+;; loose inside a Center it would stretch to the whole window.
+(def ^:private card-height 430.0)
+
+(defn- field [ctrl focus hint icon obscure?]
+  (ui/panel
+   {:pad (m.EdgeInsets/symmetric .horizontal 9.0 .vertical 14.0)
+    :radius theme/radius-md
+    :color theme/surface-alt}
+   (m/Row
+    .crossAxisAlignment m.CrossAxisAlignment/start
+    .children
+    [(ui/top (m/Icon icon .size 16.0 .color theme/ink-faint))
+     (ui/gap-h 8)
+     (custom-tf/text-field
+      !ime
+      {:controller ctrl
+       :focus-node focus
+       :hint hint
+       :obscure-text obscure?
+       :max-lines 1
+       :style (m/TextStyle .color theme/ink .fontFamily theme/font-family)
+       :decoration (m/InputDecoration .border m/InputBorder.none)})])))
+
+(defn- masthead [title blurb]
+  (m/Column
+   .mainAxisSize m.MainAxisSize/min
+   .crossAxisAlignment m.CrossAxisAlignment/start
+   .children
+   [(ui/brand 44.0)
+    (ui/gap-v 20)
+    (m/Flexible .child (mg/title title 22.0))
+    (ui/gap-v 12)
+    (mg/muted blurb)]))
+
+(defn- card [child]
+  (m/Center
    .child
-   (custom-tf/text-field
-    !ime
-    {:controller ctrl
-     :focus-node focus
-     :hint hint
-     :obscure-text obscure?
-     :max-lines 1
-     :style (m/TextStyle .color theme/ink .fontFamily theme/font-family)
-     :decoration (m/InputDecoration .border m/InputBorder.none)})))
+   (ui/panel
+    {:height card-height
+     :pad 26.0
+     :radius theme/radius-lg
+     :shadow theme/card-shadow
+     :margin (m.EdgeInsets/all 24.0)}
+    child)))
+
+(defn- shell [body]
+  (m/Scaffold
+   .backgroundColor theme/bg
+   .resizeToAvoidBottomInset false
+   .body (ui/backdrop (m/SafeArea .child (kb/wrap body)))))
 
 (defn- submit-login! [ctx navigator user-ctrl pass-ctrl]
   (-> (api/login! {:username (str/trim (.-text user-ctrl))
@@ -57,20 +93,6 @@
                      nil)))
   nil)
 
-(defn- login-actions [ctx navigator user-ctrl pass-ctrl]
-  (m/Column
-   .mainAxisAlignment m.MainAxisAlignment/center
-   .children
-   [(mgl/MongolElevatedButton
-     .onPressed #(submit-login! ctx navigator user-ctrl pass-ctrl)
-     .child (mg/text "OK"))
-    (m/SizedBox .height 16.0)
-    (mgl/MongolTextButton
-     .onPressed #(do (.pushReplacementNamed navigator "/register") nil)
-     .child (mg/text "register"))
-    (m/SizedBox .height 16.0)
-    (mg/muted "demo / demo123")]))
-
 (defn login-screen []
   (f/widget
    :context ctx
@@ -81,26 +103,26 @@
              pass-ctrl (m/TextEditingController.)
              user-focus (m/FocusNode.)
              pass-focus (m/FocusNode.)]
-   (m/Scaffold
-    .backgroundColor theme/bg
-    .resizeToAvoidBottomInset false
-    .appBar (m/AppBar .title (mg/text "login"))
-    .body
-    (m/SafeArea
-     .child
-     (kb/wrap
-      (m/Padding
-       .padding (m.EdgeInsets/all 24.0)
-       .child
-       (m/Row
-        ;; Center-align so fields size naturally without hugging edges
-        .mainAxisAlignment m.MainAxisAlignment/center
-        .children
-        [(field user-ctrl user-focus "username" false)
-         (m/SizedBox .width 16.0)
-         (field pass-ctrl pass-focus "password" true)
-         (m/SizedBox .width 32.0)
-         (login-actions ctx navigator user-ctrl pass-ctrl)])))))))
+   (shell
+    (card
+     (m/Row
+      .crossAxisAlignment m.CrossAxisAlignment/stretch
+      .children
+      [(masthead "Sign in" "Welcome back to Nomio")
+       (ui/gap-h 30)
+       (field user-ctrl user-focus "username" m.Icons/person_outline false)
+       (ui/gap-h 12)
+       (field pass-ctrl pass-focus "password" m.Icons/lock_outline true)
+       (ui/gap-h 24)
+       (ui/action {:label "Sign in"
+                   :icon m.Icons/arrow_forward_rounded
+                   :on-tap #(submit-login! ctx navigator user-ctrl pass-ctrl)})
+       (ui/gap-h 12)
+       (ui/ghost-action {:label "Register"
+                         :icon m.Icons/person_add_alt_1_outlined
+                         :on-tap #(do (.pushReplacementNamed navigator "/register") nil)})
+       (ui/gap-h 18)
+       (ui/top (mg/muted "demo / demo123"))])))))
 
 (defn register-screen []
   (f/widget
@@ -114,26 +136,23 @@
              user-focus (m/FocusNode.)
              pass-focus (m/FocusNode.)
              name-focus (m/FocusNode.)]
-   (m/Scaffold
-    .backgroundColor theme/bg
-    .resizeToAvoidBottomInset false
-    .appBar (m/AppBar .title (mg/text "register"))
-    .body
-    (m/SafeArea
-     .child
-     (kb/wrap
-      (m/Padding
-       .padding (m.EdgeInsets/all 24.0)
-       .child
-       (m/Row
-        .mainAxisAlignment m.MainAxisAlignment/center
-        .children
-        [(field name-ctrl name-focus "name" false)
-         (m/SizedBox .width 16.0)
-         (field user-ctrl user-focus "username" false)
-         (m/SizedBox .width 16.0)
-         (field pass-ctrl pass-focus "password" true)
-         (m/SizedBox .width 32.0)
-         (mgl/MongolElevatedButton
-          .onPressed #(submit-register! ctx navigator user-ctrl pass-ctrl name-ctrl)
-          .child (mg/text "OK"))])))))))
+   (shell
+    (card
+     (m/Row
+      .crossAxisAlignment m.CrossAxisAlignment/stretch
+      .children
+      [(masthead "Register" "Pick a name and start writing")
+       (ui/gap-h 30)
+       (field name-ctrl name-focus "name" m.Icons/badge_outlined false)
+       (ui/gap-h 12)
+       (field user-ctrl user-focus "username" m.Icons/person_outline false)
+       (ui/gap-h 12)
+       (field pass-ctrl pass-focus "password" m.Icons/lock_outline true)
+       (ui/gap-h 24)
+       (ui/action {:label "Create account"
+                   :icon m.Icons/arrow_forward_rounded
+                   :on-tap #(submit-register! ctx navigator user-ctrl pass-ctrl name-ctrl)})
+       (ui/gap-h 12)
+       (ui/ghost-action {:label "Sign in"
+                         :icon m.Icons/login_rounded
+                         :on-tap #(do (.pushReplacementNamed navigator "/login") nil)})])))))

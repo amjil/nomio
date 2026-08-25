@@ -1,52 +1,103 @@
 (ns nomio.widgets.side-nav
   (:require ["package:flutter/material.dart" :as m]
-            ["package:mongol/mongol.dart" :as mgl]
             [cljd.flutter :as f]
             [nomio.state.store :as store]
-            [nomio.theme :as theme]))
+            [nomio.theme :as theme]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.ui :as ui]))
 
 (def tabs
-  [{:id "home" :icon m.Icons/home_outlined :selected-icon m.Icons/home :label "Home"}
+  [{:id "home" :icon m.Icons/home_outlined :selected-icon m.Icons/home_rounded :label "Home"}
    {:id "explore" :icon m.Icons/explore_outlined :selected-icon m.Icons/explore :label "Explore"}
-   {:id "articles" :icon m.Icons/article_outlined :selected-icon m.Icons/article :label "Articles"}
-   {:id "questions" :icon m.Icons/help_outline :selected-icon m.Icons/help :label "Questions"}
-   {:id "search" :icon m.Icons/search :selected-icon m.Icons/search :label "Search"}
-   {:id "create" :icon m.Icons/edit_outlined :selected-icon m.Icons/edit :label "Write"}
-   {:id "bookmarks" :icon m.Icons/bookmark_border :selected-icon m.Icons/bookmark :label "Bookmarks"}
-   {:id "notifications" :icon m.Icons/notifications_none :selected-icon m.Icons/notifications :label "Notify"}
-   {:id "profile" :icon m.Icons/person_outline :selected-icon m.Icons/person :label "Profile"}])
+   {:id "articles" :icon m.Icons/article_outlined :selected-icon m.Icons/article_rounded :label "Articles"}
+   {:id "questions" :icon m.Icons/help_outline :selected-icon m.Icons/help_rounded :label "Questions"}
+   {:id "search" :icon m.Icons/search_rounded :selected-icon m.Icons/search_rounded :label "Search"}
+   {:id "create" :icon m.Icons/edit_outlined :selected-icon m.Icons/edit_rounded :label "Write"}
+   {:id "bookmarks" :icon m.Icons/bookmark_border :selected-icon m.Icons/bookmark_rounded :label "Bookmarks"}
+   {:id "notifications" :icon m.Icons/notifications_none :selected-icon m.Icons/notifications_rounded :label "Notify"}
+   {:id "profile" :icon m.Icons/person_outline :selected-icon m.Icons/person_rounded :label "Profile"}])
 
 (def mobile-tabs
-  [{:id "home" :icon m.Icons/home_outlined :selected-icon m.Icons/home :label "Home"}
+  [{:id "home" :icon m.Icons/home_outlined :selected-icon m.Icons/home_rounded :label "Home"}
    {:id "explore" :icon m.Icons/explore_outlined :selected-icon m.Icons/explore :label "Explore"}
-   {:id "create" :icon m.Icons/edit_outlined :selected-icon m.Icons/edit :label "Write"}
-   {:id "notifications" :icon m.Icons/notifications_none :selected-icon m.Icons/notifications :label "Notify"}
-   {:id "profile" :icon m.Icons/person_outline :selected-icon m.Icons/person :label "Profile"}])
+   {:id "create" :icon m.Icons/edit_outlined :selected-icon m.Icons/edit_rounded :label "Write"}
+   {:id "notifications" :icon m.Icons/notifications_none :selected-icon m.Icons/notifications_rounded :label "Notify"}
+   {:id "profile" :icon m.Icons/person_outline :selected-icon m.Icons/person_rounded :label "Profile"}])
 
-(defn- rail-for [tab-list]
-  (f/widget
-   :watch [selected-nav-id (f/sub store/app-ui :selected-nav-id)]
-   (let [idx (or (first (keep-indexed (fn [i t] (when (= (:id t) selected-nav-id) i)) tab-list)) 0)]
-     (m/NavigationRail
-      .backgroundColor theme/surface
-      .selectedIndex (int idx)
-      .labelType m.NavigationRailLabelType/all
-      .groupAlignment -1.0
-      .scrollable true
-      .onDestinationSelected
-      (fn [i]
-        (store/set-nav! (:id (nth tab-list (int i)))))
-      .destinations
-      (mapv (fn [{:keys [icon selected-icon label]}]
-              (m/NavigationRailDestination
-               .icon (m/Icon icon)
-               .selectedIcon (m/Icon selected-icon)
-               .label (m/Padding
-                       .padding (m.EdgeInsets/only .top 8.0)
-                       .child
-                       (mgl/MongolText label
-                                       .style (m/TextStyle .fontFamily theme/font-family
-                                                           .fontSize 14.0)))))
-            tab-list)))))
+(def ^:private ease (dart:core/Duration. .milliseconds 180))
+
+(defn- destination [{:keys [id icon selected-icon label]} active?]
+  (m/Padding
+   .padding (m.EdgeInsets/symmetric .horizontal 9.0 .vertical 3.0)
+   .child
+   (m/AnimatedContainer
+    .duration ease
+    .clipBehavior m.Clip/antiAlias
+    .decoration (m/BoxDecoration
+                 .color (if active? theme/accent-soft theme/transparent)
+                 .borderRadius (theme/r 17.0)
+                 .border (m/Border.all
+                          .color (if active? theme/divider-strong theme/transparent)
+                          .width 1.0))
+    .child
+    (ui/tappable
+     #(store/set-nav! id)
+     17.0
+     (m/Padding
+      .padding (m.EdgeInsets/symmetric .horizontal 11.0 .vertical 15.0)
+      .child
+      (m/Column
+       .mainAxisSize m.MainAxisSize/min
+       .children
+       [(m/Icon (if active? selected-icon icon)
+                .size 21.0
+                .color (if active? theme/accent theme/ink-faint))
+        (m/SizedBox .height 10.0)
+        (mg/text label {:size 12.5
+                        :max-lines 1
+                        :color (if active? theme/ink theme/ink-faint)
+                        :weight (when active? m.FontWeight/w600)})]))))))
+
+(defn- footer [user]
+  (m/Padding
+   .padding (m.EdgeInsets/symmetric .horizontal 12.0 .vertical 14.0)
+   .child
+   (if user
+     (ui/tappable
+      #(store/set-nav! "profile")
+      theme/radius-pill
+      (ui/avatar (or (:display-name user) (:username user)) 38.0))
+     (ui/icon-button {:icon m.Icons/login_rounded
+                      :on-tap #(store/push-named! "/login")}))))
+
 (defn rail []
-  (rail-for tabs))
+  (f/widget
+   ;; Subscribing to the whole app-ui atom would rebuild the rail whenever an
+   ;; unrelated key (explore tab, question filter) changes.
+   :watch [selected-nav-id (f/sub store/app-ui :selected-nav-id)
+           {:keys [user]} store/session]
+   (m/Container
+    .width 80.0
+    .decoration (m/BoxDecoration
+                 .color theme/surface
+                 .border (m/Border .right (m/BorderSide .color theme/divider .width 1.0)))
+    .child
+    (m/SafeArea
+     .right false
+     .child
+     (m/Column
+      .children
+      [(m/Padding
+        .padding (m.EdgeInsets/symmetric .vertical 20.0)
+        .child (ui/brand 40.0))
+       (m/Container .height 1.0 .width 34.0 .color theme/divider)
+       (m/Expanded
+        .child
+        (m/SingleChildScrollView
+         .padding (m.EdgeInsets/symmetric .vertical 12.0)
+         .child
+         (m/Column
+          .children
+          (mapv (fn [t] (destination t (= (:id t) selected-nav-id))) tabs))))
+       (m/Container .height 1.0 .width 34.0 .color theme/divider)
+       (footer user)])))))

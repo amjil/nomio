@@ -1,10 +1,13 @@
 (ns nomio.pages.questions
-  (:require [cljd.flutter :as f]
+  (:require ["package:flutter/material.dart" :as m]
+            [cljd.flutter :as f]
             [nomio.core.api :as api]
             [nomio.state.store :as store]
+            [nomio.theme :as theme]
             [nomio.widgets.content-card :as cards]
             [nomio.widgets.filter-bar :as filter-bar]
-            [nomio.widgets.paged :as paged]))
+            [nomio.widgets.paged :as paged]
+            [nomio.widgets.ui :as ui]))
 
 ;; GET /questions already orders by published_at desc, so a "Latest" chip would
 ;; return exactly what "All" does. Bring it back if the API grows a sort param.
@@ -30,5 +33,12 @@
                  nil)
          apply! (fn [flt] (show! flt) (paged/reload! ctx !st fetch) nil)
          _ (apply! initial)]
-   (paged/section (filter-bar/single-select filters initial apply!)
-                  !st fetch cards/card)))
+   (paged/section
+    (ui/page-header
+     {:title "Questions"
+      :icon m.Icons/help_outline
+      :tone theme/gold
+      :subtitle "Ask, and answer"
+      :on-refresh (fn [] (paged/reload! ctx !st fetch) nil)
+      :extra (filter-bar/single-select filters initial apply!)})
+    !st fetch cards/card)))

@@ -21,6 +21,6 @@
     (cond
       (= s unauthorized) "Session expired — please sign in again"
       (= s timeout) "The server took too long to respond"
-      (= s offline) "No network connection"
+      (= s offline) "Cannot reach the server"
       (str/blank? s) "Something went wrong"
       :else s)))

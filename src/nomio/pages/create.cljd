@@ -5,7 +5,8 @@
             [nomio.state.store :as store]
             [nomio.theme :as theme]
             [nomio.widgets.mongol :as mg]
-            [nomio.widgets.toast :as toast]))
+            [nomio.widgets.toast :as toast]
+            [nomio.widgets.ui :as ui]))
 
 (defn- start! [ctx type*]
   (store/require-auth!
@@ -21,25 +22,33 @@
                         nil)))))
   nil)
 
-(defn- tile [ctx icon label type*]
-  (m/InkWell
-   .onTap #(start! ctx type*)
-   .child
-   (m/Container
-    .margin (m.EdgeInsets/all 16.0)
-    .padding (m.EdgeInsets/all 24.0)
-    .decoration (m/BoxDecoration
-                 .color theme/surface
-                 .borderRadius (m.BorderRadius/circular 16.0)
-                 .border (m/Border.all .color theme/divider))
-    .child
-    (m/Column
-     .mainAxisAlignment m.MainAxisAlignment/center
-     .mainAxisSize m.MainAxisSize/min
-     .children
-     [(m/Icon icon .size 36.0 .color theme/accent)
-      (m/SizedBox .height 16.0)
-      (mg/text label {:size 18.0})]))))
+(defn- tile [ctx {:keys [icon label blurb type*]}]
+  (let [{:keys [color wash]} (theme/tone type*)]
+    (ui/panel
+     {:width 250.0
+      :height 340.0
+      :margin (m.EdgeInsets/all 14.0)
+      :pad 26.0
+      :radius theme/radius-lg
+      :shadow theme/card-shadow
+      :on-tap #(start! ctx type*)}
+     (m/Row
+      .crossAxisAlignment m.CrossAxisAlignment/stretch
+      .children
+      [(ui/spine color)
+       (ui/gap-h 18)
+       (ui/top
+        (m/Container
+         .width 46.0
+         .height 46.0
+         .decoration (m/BoxDecoration
+                      .color wash
+                      .borderRadius (theme/r 15.0))
+         .child (m/Center .child (m/Icon icon .size 22.0 .color color))))
+       (ui/gap-h 16)
+       (m/Expanded .flex 2 .child (mg/title label 19.0))
+       (ui/gap-h 10)
+       (m/Expanded .flex 3 .child (mg/muted blurb))]))))
 
 (defn page []
   (f/widget
@@ -47,7 +56,26 @@
    (m/Center
     .child
     (m/Row
+     .mainAxisSize m.MainAxisSize/min
      .mainAxisAlignment m.MainAxisAlignment/center
      .children
-     [(tile ctx m.Icons/article_outlined "Article" :article)
-      (tile ctx m.Icons/help_outline "Question" :question)]))))
+     [(m/Padding
+       .padding (m.EdgeInsets/only .right 20.0)
+       .child
+       (m/Column
+        .mainAxisSize m.MainAxisSize/min
+        .crossAxisAlignment m.CrossAxisAlignment/start
+        .children
+        [(ui/brand 44.0)
+         (ui/gap-v 20)
+         (mg/title "Write" 22.0)
+         (ui/gap-v 12)
+         (mg/muted "Start something new")]))
+      (tile ctx {:icon m.Icons/article_outlined
+                 :label "Article"
+                 :blurb "A piece you publish on its own"
+                 :type* :article})
+      (tile ctx {:icon m.Icons/help_outline
+                 :label "Question"
+                 :blurb "Ask the community for an answer"
+                 :type* :question})]))))
