@@ -1,0 +1,139 @@
+(ns nomio.pages.auth
+  (:require ["package:flutter/material.dart" :as m]
+            ["package:mongol/mongol.dart" :as mgl]
+            [cljd.flutter :as f]
+            [clojure.string :as str]
+            [nomio.core.api :as api]
+            [nomio.platform :as platform]
+            [nomio.theme :as theme]
+            [nomio.widgets.keyboard :as kb]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.toast :as toast]
+            [rich-editor.components.text-field :as custom-tf]))
+
+(defonce ^:private !ime (atom {:external-keyboard-delegate nil}))
+
+(defn- field [ctrl focus hint obscure?]
+  ;; Drop hardcoded Container width; keep reasonable padding
+  (m/Padding
+   .padding (m.EdgeInsets/symmetric .horizontal 8.0)
+   .child
+   (custom-tf/text-field
+    !ime
+    {:controller ctrl
+     :focus-node focus
+     :hint hint
+     :obscure-text obscure?
+     :max-lines 1
+     :style (m/TextStyle .color theme/ink .fontFamily theme/font-family)
+     :decoration (m/InputDecoration .border m/InputBorder.none)})))
+
+(defn- submit-login! [ctx navigator user-ctrl pass-ctrl]
+  (-> (api/login! {:username (str/trim (.-text user-ctrl))
+                   :password (.-text pass-ctrl)})
+      (.then (fn [_]
+               (when (.-mounted ^m/BuildContext ctx)
+                 (toast/success! ctx "Signed in")
+                 (when (.-canPop navigator) (.pop navigator)))
+               nil))
+      (.catchError (fn [e]
+                     (when (.-mounted ^m/BuildContext ctx)
+                       (toast/error! ctx e))
+                     nil)))
+  nil)
+
+(defn- submit-register! [ctx navigator user-ctrl pass-ctrl name-ctrl]
+  (-> (api/register! {:username (str/trim (.-text user-ctrl))
+                      :password (.-text pass-ctrl)
+                      :display-name (str/trim (.-text name-ctrl))})
+      (.then (fn [_]
+               (when (.-mounted ^m/BuildContext ctx)
+                 (toast/success! ctx "Account created")
+                 (when (.-canPop navigator) (.pop navigator)))
+               nil))
+      (.catchError (fn [e]
+                     (when (.-mounted ^m/BuildContext ctx)
+                       (toast/error! ctx e))
+                     nil)))
+  nil)
+
+(defn- login-actions [ctx navigator user-ctrl pass-ctrl]
+  (m/Column
+   .mainAxisAlignment m.MainAxisAlignment/center
+   .children
+   [(mgl/MongolElevatedButton
+     .onPressed #(submit-login! ctx navigator user-ctrl pass-ctrl)
+     .child (mg/text "OK"))
+    (m/SizedBox .height 16.0)
+    (mgl/MongolTextButton
+     .onPressed #(do (.pushReplacementNamed navigator "/register") nil)
+     .child (mg/text "register"))
+    (m/SizedBox .height 16.0)
+    (mg/muted "demo / demo123")]))
+
+(defn login-screen []
+  (f/widget
+   :context ctx
+   :get [m/Navigator]
+   :managed [ime-control (kb/install)
+             :dispose kb/restore-ime!
+             user-ctrl (m/TextEditingController.)
+             pass-ctrl (m/TextEditingController.)
+             user-focus (m/FocusNode.)
+             pass-focus (m/FocusNode.)]
+   (m/Scaffold
+    .backgroundColor theme/bg
+    .resizeToAvoidBottomInset false
+    .appBar (m/AppBar .title (mg/text "login"))
+    .body
+    (m/SafeArea
+     .child
+     (kb/wrap
+      (m/Padding
+       .padding (m.EdgeInsets/all 24.0)
+       .child
+       (m/Row
+        ;; Center-align so fields size naturally without hugging edges
+        .mainAxisAlignment m.MainAxisAlignment/center
+        .children
+        [(field user-ctrl user-focus "username" false)
+         (m/SizedBox .width 16.0)
+         (field pass-ctrl pass-focus "password" true)
+         (m/SizedBox .width 32.0)
+         (login-actions ctx navigator user-ctrl pass-ctrl)])))))))
+
+(defn register-screen []
+  (f/widget
+   :context ctx
+   :get [m/Navigator]
+   :managed [ime-control (kb/install)
+             :dispose kb/restore-ime!
+             user-ctrl (m/TextEditingController.)
+             pass-ctrl (m/TextEditingController.)
+             name-ctrl (m/TextEditingController.)
+             user-focus (m/FocusNode.)
+             pass-focus (m/FocusNode.)
+             name-focus (m/FocusNode.)]
+   (m/Scaffold
+    .backgroundColor theme/bg
+    .resizeToAvoidBottomInset false
+    .appBar (m/AppBar .title (mg/text "register"))
+    .body
+    (m/SafeArea
+     .child
+     (kb/wrap
+      (m/Padding
+       .padding (m.EdgeInsets/all 24.0)
+       .child
+       (m/Row
+        .mainAxisAlignment m.MainAxisAlignment/center
+        .children
+        [(field name-ctrl name-focus "name" false)
+         (m/SizedBox .width 16.0)
+         (field user-ctrl user-focus "username" false)
+         (m/SizedBox .width 16.0)
+         (field pass-ctrl pass-focus "password" true)
+         (m/SizedBox .width 32.0)
+         (mgl/MongolElevatedButton
+          .onPressed #(submit-register! ctx navigator user-ctrl pass-ctrl name-ctrl)
+          .child (mg/text "OK"))])))))))

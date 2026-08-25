@@ -1,0 +1,47 @@
+(ns nomio.content.editor
+  "NomioContentEditor — thin wrap around mgl-block-editor.
+   Autosave / revision / publish live in the write page, not here."
+  (:require ["package:flutter/material.dart" :as m]
+            [block-editor.widgets.editor :as editor]
+            [block-editor.widgets.toolbar :as toolbar]
+            [block-editor.plugins.image :as image]
+            [clojure.string :as str]
+            [nomio.state.store :as store]
+            [nomio.theme :as theme]))
+
+(defn editor-config
+  ([] (editor-config nil))
+  ([on-link]
+   {:block-plugins [(image/image-plugin)]
+    :text-block-types #{:paragraph :heading-1 :heading-2 :heading-3
+                        :blockquote :list-item :ordered-list-item :task :callout :toggle}
+    :on-link-tap (or on-link (fn [_]))
+    :link-suggestions
+    (fn [query]
+      (let [q (str/lower-case (or query ""))
+            titles (store/title-suggestions)]
+        (filterv #(str/includes? (str/lower-case %) q) titles)))
+    :block-style
+    (fn [b-type]
+      (case b-type
+        :heading-1 (theme/text 32.0)
+        :heading-2 (theme/text 24.0)
+        :heading-3 (m/TextStyle .fontSize 20.0 .fontWeight m/FontWeight.w600
+                                .color theme/ink .fontFamily theme/font-family)
+        (theme/text 18.0 theme/ink-muted)))}))
+
+(defn widget
+  [!state & {:keys [wrap-ime? show-handles? padding toolbar?]
+             :or {wrap-ime? false
+                  show-handles? true
+                  padding (m.EdgeInsets/all 24.0)
+                  toolbar? true}}]
+  (let [cfg (editor-config)]
+    (editor/mongol-block-editor
+     !state
+     :editor-config cfg
+     :toolbar (when toolbar? (toolbar/editor-toolbar !state cfg))
+     :background-color theme/bg
+     :show-block-handles? show-handles?
+     :wrap-ime? wrap-ime?
+     :padding padding)))

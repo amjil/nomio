@@ -1,0 +1,250 @@
+(ns nomio.pages.write
+  "Article / Question / Answer editor with autosave, preview, publish."
+  (:require ["package:flutter/material.dart" :as m]
+            ["package:mongol/mongol.dart" :as mgl]
+            ["dart:async" :as async]
+            [cljd.flutter :as f]
+            [clojure.string :as str]
+            [block-editor.utils.history :as history]
+            [nomio.content.document :as doc]
+            [nomio.content.editor :as neditor]
+            [nomio.content.reader :as nreader]
+            [nomio.core.api :as api]
+            [nomio.theme :as theme]
+            [nomio.widgets.async :as asy]
+            [nomio.widgets.keyboard :as kb]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.toast :as toast]
+            [rich-editor.components.text-field :as custom-tf]))
+
+(defonce ^:private !ime (atom {:external-keyboard-delegate nil}))
+
+(defn- cancel-timer-atom! [!t]
+  (when-let [t @!t] (.cancel ^async/Timer t))
+  nil)
+
+(defn- dispose-autosave! [{:keys [!state !save-timer title-ctrl tags-ctrl on-meta]}]
+  (remove-watch !state :autosave)
+  (when on-meta
+    (.removeListener ^m/TextEditingController title-ctrl on-meta)
+    (.removeListener ^m/TextEditingController tags-ctrl on-meta))
+  (cancel-timer-atom! !save-timer)
+  nil)
+
+(defn- status-label [c]
+  (case (:status c)
+    :published "Published"
+    :draft "Draft"
+    (str (:status c))))
+
+(defn- parse-tags [^m/TextEditingController ctrl]
+  (->> (str/split (or (.-text ctrl) "") #"[,\s#]+")
+       (remove str/blank?)
+       vec))
+
+(defn- save!
+  "Resolves true when the draft reached the server."
+  [id ^m/TextEditingController title-ctrl tags-ctrl !state !save-status]
+  (reset! !save-status :saving)
+  (-> (api/save-draft!
+       id
+       {:title (.-text title-ctrl)
+        :document @!state
+        :tags (parse-tags tags-ctrl)})
+      (.then (fn [_]
+               (reset! !save-status :saved)
+               true))
+      (.catchError (fn [e]
+                     (reset! !save-status :error)
+                     (dart:core/print (str "autosave failed: " e))
+                     false))))
+
+(defn- publish-flow! [ctx navigator id ^m/TextEditingController title-ctrl tags-ctrl !state]
+  (-> (api/save-draft!
+       id
+       {:title (.-text title-ctrl)
+        :document @!state
+        :tags (parse-tags tags-ctrl)})
+      (.then (fn [_] (api/publish! id)))
+      (.then (fn [c]
+               (when (.-mounted ^m/BuildContext ctx)
+                 (toast/success! ctx "Published")
+                 (when navigator
+                   (case (:type c)
+                     :question (.pushReplacementNamed navigator (str "/questions/" (:slug c)))
+                     :answer (.pushReplacementNamed navigator (str "/answers/" (:id c)))
+                     (.pushReplacementNamed navigator (str "/articles/" (:slug c))))))
+               nil))
+      (.catchError (fn [e]
+                     (when (.-mounted ^m/BuildContext ctx)
+                       (toast/error! ctx e))
+                     nil)))
+  nil)
+
+(defn- preview-dialog [ctx document title]
+  (m/showDialog
+   .context ctx
+   .builder
+   (fn [_]
+     (m/Dialog
+      .backgroundColor theme/bg
+      .child
+      (m/SizedBox
+       .width 720.0
+       .height 480.0
+       .child
+       (m/Column
+        .children
+        [(m/Padding
+          .padding (m.EdgeInsets/all 12.0)
+          .child (mg/text (or title "") {:size 18.0}))
+         (m/Expanded .child (nreader/widget document))])))))
+  nil)
+
+(defn- editor-chrome
+  "AppBar bits that need !state (undo/redo enable). Own :watch so the scaffold
+   can mount mongol-block-editor without setState-during-build — same pattern as
+   mgl-mail-app compose toolbar / mgl-notes-app editor-chrome."
+  [content !state !save-status title-ctrl tags-ctrl content-id]
+  (f/widget
+   :context ctx
+   :get [m/Navigator]
+   :watch [st !state
+           save-status !save-status]
+   (let [save-label (case save-status
+                      :saving "…"
+                      :saved "✓"
+                      :error "!"
+                      "")]
+     (m/AppBar
+      .leading (m/IconButton
+                .icon (m/Icon m.Icons/arrow_back)
+                .onPressed (fn []
+                             (-> (save! content-id title-ctrl tags-ctrl !state !save-status)
+                                 (.then (fn [saved?]
+                                          (when (.-mounted ^m/BuildContext ctx)
+                                            (if saved?
+                                              (.pop navigator)
+                                              (toast/error! ctx "save failed")))
+                                          nil)))
+                             nil))
+      .title (mg/text (str (status-label content) "  " save-label) {:size 14.0})
+      .actions
+      [(m/IconButton
+        .icon (m/Icon m.Icons/undo)
+        .onPressed (when (seq (get-in st [:history :undo-stack]))
+                     #(history/undo! !state)))
+       (m/IconButton
+        .icon (m/Icon m.Icons/redo)
+        .onPressed (when (seq (get-in st [:history :redo-stack]))
+                     #(history/redo! !state)))
+       (mgl/MongolTextButton
+        .onPressed #(preview-dialog ctx @!state (.-text title-ctrl))
+        .child (mg/text "preview" {:size 13.0 :color theme/accent}))
+       (mgl/MongolTextButton
+        .onPressed #(publish-flow! ctx navigator content-id title-ctrl tags-ctrl !state)
+        .child (mg/text "Publish" {:size 13.0 :color theme/accent}))]))))
+
+(defn- editor-screen [content]
+  (f/widget
+   :let [!state (atom (or (:document content) (doc/empty-document)))
+         !save-status (atom :idle)
+         !save-timer (atom nil)
+         question? (= :question (:type content))
+         answer? (= :answer (:type content))
+         content-id (:id content)
+         ;; Build editor before any ancestor :watch on !state — mongol-block-editor
+         ;; swap!s :editor-config at construction time (same as notes-app).
+         editor-body (neditor/widget !state :wrap-ime? false)]
+   ;; These two are bound only so :managed can dispose them.
+   :managed [_ime-control (kb/install)
+             :dispose kb/restore-ime!
+             title-ctrl (m/TextEditingController. .text (or (:title content) ""))
+             tags-ctrl (m/TextEditingController. .text (str/join " " (or (:tags content) [])))
+             title-focus (m/FocusNode.)
+             tags-focus (m/FocusNode.)
+             _autosave
+             (let [schedule!
+                   (fn []
+                     (when-let [t @!save-timer] (.cancel ^async/Timer t))
+                     (reset! !save-timer
+                             (async/Timer. (dart:core/Duration. .seconds 2)
+                                           #(save! content-id title-ctrl tags-ctrl
+                                                   !state !save-status)))
+                     nil)]
+               (add-watch !state :autosave (fn [_ _ _ _] (schedule!)))
+               ;; Title and tags live in controllers, not in !state, so they need
+               ;; their own hook into the same debounce.
+               (.addListener title-ctrl schedule!)
+               (.addListener tags-ctrl schedule!)
+               {:!state !state
+                :!save-timer !save-timer
+                :title-ctrl title-ctrl
+                :tags-ctrl tags-ctrl
+                :on-meta schedule!})
+             :dispose dispose-autosave!]
+   (m/Scaffold
+    .backgroundColor theme/bg
+    .resizeToAvoidBottomInset false
+    ;; f/widget is not PreferredSizeWidget; PreferredSize satisfies Scaffold.appBar.
+    .appBar
+    (m/PreferredSize
+     .preferredSize (m.Size/fromHeight m/kToolbarHeight)
+     .child (editor-chrome content !state !save-status title-ctrl tags-ctrl content-id))
+    .body
+    (m/SafeArea
+     .child
+     (kb/wrap
+      (m/Row
+       .crossAxisAlignment m.CrossAxisAlignment/stretch
+       .children
+       (cond-> []
+         (not answer?)
+         (conj
+          (m/Padding
+           .padding (m.EdgeInsets/all 8.0)
+           .child
+           (custom-tf/text-field
+            !ime
+            {:controller title-ctrl
+             :focus-node title-focus
+             :hint "Title"
+             :max-lines 1
+             :style (m/TextStyle .color theme/ink .fontSize 18.0 .fontFamily theme/font-family)
+             :decoration (m/InputDecoration .border m/InputBorder.none)})))
+
+         (or question? (not answer?))
+         (conj
+          (m/Padding
+           .padding (m.EdgeInsets/all 8.0)
+           .child
+           (custom-tf/text-field
+            !ime
+            {:controller tags-ctrl
+             :focus-node tags-focus
+             :hint "#tag"
+             :max-lines 1
+             :style (m/TextStyle .color theme/ink-muted .fontFamily theme/font-family)
+             :decoration (m/InputDecoration .border m/InputBorder.none)})))
+
+         true
+         (conj
+          (m/Expanded .child editor-body)))))))))
+
+(defn- fetch
+  "A missing draft is an error like any other, so the screen can report why it
+   failed instead of blaming every failure on a 404."
+  [content-id]
+  (-> (api/get-content content-id)
+      (.then (fn [content]
+               (if content
+                 content
+                 (throw (Exception. "This draft no longer exists")))))))
+
+(defn screen [content-id]
+  (f/widget
+   :context ctx
+   :let [!st (atom {:status :loading})
+         reload! (fn [] (asy/load! ctx !st (fetch content-id)) nil)
+         _ (reload!)]
+   (asy/screen !st editor-screen :retry reload!)))

@@ -1,0 +1,31 @@
+(ns nomio.pages.tags
+  (:require ["package:flutter/material.dart" :as m]
+            [cljd.flutter :as f]
+            [nomio.core.api :as api]
+            [nomio.state.store :as store]
+            [nomio.theme :as theme]
+            [nomio.widgets.content-card :as cards]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.paged :as paged]))
+
+(defn- tag-card [t]
+  (m/InkWell
+   .onTap #(store/push-named! (str "/tags/" (:slug t)))
+   .child
+   (m/Padding
+    .padding (m.EdgeInsets/all 16.0)
+    .child (mg/text (str "#" (:name t) " " (:count t))))))
+
+(defn page []
+  (paged/list-page "Tags" api/tags tag-card))
+
+(defn tag-screen [slug]
+  (f/widget
+   :context ctx
+   :let [fetch (fn [opts] (api/by-tag slug opts))
+         !st (paged/state)
+         _ (paged/load-more! ctx !st fetch)]
+   (m/Scaffold
+    .backgroundColor theme/bg
+    .appBar (m/AppBar .title (mg/text (str "#" slug)))
+    .body (paged/strip !st fetch cards/card))))

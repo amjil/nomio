@@ -1,0 +1,121 @@
+(ns nomio.widgets.comments
+  "Comments use mgl-richtext-editor (simple-editor), not the block editor."
+  (:require ["package:flutter/material.dart" :as m]
+            ["package:mongol/mongol.dart" :as mgl]
+            [cljd.flutter :as f]
+            [clojure.string :as str]
+            [rich-editor.components.simple-editor :as se]
+            [nomio.core.api :as api]
+            [nomio.state.store :as store]
+            [nomio.theme :as theme]
+            [nomio.widgets.async :as asy]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.toast :as toast]))
+
+(def ^:private post-id "main-post-id")
+
+(defn- comment-body [c]
+  (mg/text (or (:content c) "") {:size 14.0}))
+
+(defn tree
+  ([comments] (tree comments nil))
+  ([comments on-reply]
+   (let [by-parent (group-by :parent-id comments)
+         roots (or (get by-parent nil) [])]
+     (if (empty? roots)
+       (asy/empty-state "No comments yet")
+       (m/ListView
+        .scrollDirection m.Axis/horizontal
+        .padding (m.EdgeInsets/all 8.0)
+        .children
+        (mapv (fn [c]
+                (let [replies (get by-parent (:id c) [])]
+                  (m/Container
+                   ;; Column width for vertical Mongolian: text grows downward,
+                   ;; so this is how much text fits before it wraps sideways.
+                   .width 200.0
+                   .margin (m.EdgeInsets/only .right 8.0)
+                   .padding (m.EdgeInsets/all 12.0)
+                   .decoration (m/BoxDecoration
+                                .color theme/surface
+                                .borderRadius (m.BorderRadius/circular 8.0))
+                   .child
+                   (m/Column
+                    .crossAxisAlignment m.CrossAxisAlignment/start
+                    .children
+                    [(mg/muted (or (get-in c [:author :display-name])
+                                   (get-in c [:author :username]) ""))
+                     (m/SizedBox .height 8.0)
+                     (m/Expanded .child (comment-body c))
+                     (if on-reply
+                       (mgl/MongolTextButton
+                        .onPressed #(on-reply (:id c))
+                        .child (mg/muted "ᠬᠠᠷᠢᠭᠤᠯᠬᠤ")) ; "reply"
+                       (m/SizedBox.shrink))
+                     (if (seq replies)
+                       (m/Expanded
+                        .child
+                        (m/Column
+                         .children
+                         (mapv (fn [r]
+                                 (m/Padding
+                                  .padding (m.EdgeInsets/only .top 8.0)
+                                  .child (comment-body r)))
+                               replies)))
+                       (m/SizedBox.shrink))]))))
+              roots))))))
+
+(defn composer
+  [target-type target-id & {:keys [on-posted parent-id !reply-to]}]
+  (f/widget
+   :context ctx
+   ;; State lives in :let so a rebuild does not discard the draft.
+   :let [!ed (se/init-simple-state)
+         !tick (atom 0)
+         !actual-reply (or !reply-to (atom parent-id))]
+   :watch [_ !tick
+           reply !actual-reply]
+   (m/Column
+    .children
+    [(if reply
+       (m/Padding
+        .padding (m.EdgeInsets/symmetric .horizontal 8.0)
+        .child
+        (m/Row
+         .children
+         [(mg/muted "ᠬᠠᠷᠢᠭᠤᠯᠬᠤ") ; 蒙古文 "回复"
+          (m/IconButton
+           .icon (m/Icon m.Icons/close .size 16.0)
+           .onPressed #(reset! !actual-reply nil))]))
+       (m/SizedBox.shrink))
+     
+     (m/Expanded .child (se/simple-editor !ed))
+     
+     (m/IconButton
+      .icon (m/Icon m.Icons/send .color theme/accent)
+      .onPressed
+      (fn []
+        (store/require-auth!
+         (fn []
+           (let [content (or (get-in @!ed [:blocks post-id :content]) "")
+                 spans (or (get-in @!ed [:blocks post-id :content-spans]) [])]
+             (if (str/blank? content)
+               (toast/info! ctx "Write something first")
+               (-> (api/create-comment!
+                    (cond-> {:target-type target-type
+                             :target-id target-id
+                             :content (str/trim content)
+                             :content-spans spans}
+                      @!actual-reply (assoc :parent-id @!actual-reply)))
+                   (.then (fn [_]
+                            (when (.-mounted ^m/BuildContext ctx)
+                              (reset! !ed @(se/init-simple-state))
+                              (reset! !actual-reply nil)
+                              (swap! !tick inc)
+                              (when on-posted (on-posted))
+                              (toast/success! ctx "Comment posted"))
+                            nil))
+                   (.catchError (fn [e]
+                                  (when (.-mounted ^m/BuildContext ctx)
+                                    (toast/error! ctx e))
+                                  nil)))))))))])))

@@ -1,0 +1,51 @@
+(ns nomio.widgets.filter-bar
+  "Radio-style chip column.
+
+   components.chip/filter-chip is multi-select and exposes no callback, so the
+   single-select behaviour has to be derived from the state atom. That derivation
+   lives here once instead of in every page that needs a filter."
+  (:require ["package:flutter/material.dart" :as m]
+            [cljd.flutter :as f]
+            [components.chip :as chip]))
+
+(defn- turned-on [old new]
+  (first (keep (fn [[k v]] (when (and v (not (get old k))) k)) new)))
+
+;; :managed threads the :dispose value, so it has to be a symbol, not an inline fn.
+(defn- stop-radio! [!chips]
+  (remove-watch !chips ::radio)
+  nil)
+
+(defn single-select
+  "`options` is [[value label] ...]. `on-change` receives the newly selected
+   value; clearing the active chip falls back to `default`."
+  [options default on-change]
+  (f/widget
+   :let [!chips (atom {default true})
+         !applying (atom false)
+         choose! (fn [v]
+                   (reset! !chips {v true})
+                   (on-change v)
+                   nil)
+         _ (add-watch
+            !chips ::radio
+            (fn [_ _ old new]
+              ;; choose! writes back into !chips, so re-entry has to be blocked.
+              (when-not @!applying
+                (reset! !applying true)
+                (try
+                  (if-let [on (turned-on old new)]
+                    (when (not= old {on true}) (choose! on))
+                    (when (and (empty? (filter val new))
+                               (not= old {default true}))
+                      (choose! default)))
+                  (finally
+                    (reset! !applying false))))))]
+   :managed [_ !chips :dispose stop-radio!]
+   (m/Column
+    .children
+    (into []
+          (comp (map (fn [[value label]]
+                       (chip/filter-chip value label !chips :max-select -1)))
+                (interpose (m/SizedBox .width 12.0)))
+          options))))

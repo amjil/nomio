@@ -1,0 +1,60 @@
+(ns nomio.widgets.refresh
+  "Pull-right-to-refresh for the horizontal strips.
+
+   Wraps ../horizontal-pull-to-refresh with nomio's dark tokens: the library
+   ships an amber/green demo indicator, so we always pass our own."
+  (:require ["package:flutter/material.dart" :as m]
+            ["package:custom_refresh_indicator/custom_refresh_indicator.dart" :as cri]
+            [nomio.theme :as theme]
+            [pull-to-refresh.refresh :as ptr]))
+
+;; How far the strip slides right at a fully armed pull, and the width of the
+;; gutter the glyph sits in.
+(def ^:private travel 56.0)
+
+;; content-card already carries a horizontal margin, so the separator the
+;; library insists on has to be zero-width or the cards drift apart.
+(def ^:private gap 0.0)
+
+(defn- glyph [^cri/IndicatorController controller]
+  (if (or (.-isLoading controller) (.-isFinalizing controller))
+    (m/SizedBox .width 20.0 .height 20.0
+                .child (m/CircularProgressIndicator .strokeWidth 2.0
+                                                    .color theme/accent))
+    (m/Icon m.Icons/arrow_forward .color theme/accent .size 22.0)))
+
+(defn- indicator [_ child ^cri/IndicatorController controller]
+  (m/AnimatedBuilder
+   .animation controller
+   .builder
+   (fn [_ _]
+     (let [t (min 1.0 (double (.-value controller)))]
+       (m/Stack
+        .children
+        [(m/Positioned
+          .left 0.0 .top 0.0 .bottom 0.0 .width travel
+          .child (m/Center .child (m/Opacity .opacity t .child (glyph controller))))
+         (.translate m/Transform
+                     .offset (m/Offset (* travel t) 0.0)
+                     .child child)])))))
+
+(defn strip
+  "Horizontal list that refreshes when dragged to the right past its leading
+   edge. `on-refresh` must hand back a future, since the indicator animates
+   until it settles."
+  [{:keys [item-count item-builder on-refresh scroll-controller]}]
+  (ptr/horizontal-refresh
+   {:on-refresh on-refresh
+    :item-count item-count
+    :item-builder item-builder
+    :scroll-controller scroll-controller
+    :indicator-builder indicator
+    :background-color theme/bg
+    :box-shadow []
+    ;; The library hard-codes ListView.separated, so the strip's inter-card
+    ;; spacing lives here rather than in the list padding.
+    :separator-builder (fn [_ _] (m/SizedBox .width gap))
+    ;; Only the leading edge, and only from a standstill: a mid-strip drag has
+    ;; to stay a plain scroll or paging feels like it refreshes at random.
+    :trigger cri/IndicatorTrigger.leadingEdge
+    :trigger-mode cri/IndicatorTriggerMode.onEdge}))

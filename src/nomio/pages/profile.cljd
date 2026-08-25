@@ -1,0 +1,90 @@
+(ns nomio.pages.profile
+  (:require ["package:flutter/material.dart" :as m]
+            ["package:mongol/mongol.dart" :as mgl]
+            [cljd.flutter :as f]
+            [nomio.core.api :as api]
+            [nomio.state.store :as store]
+            [nomio.theme :as theme]
+            [nomio.widgets.async :as asy]
+            [nomio.widgets.content-card :as cards]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.sign-in :as sign-in]
+            [nomio.widgets.toast :as toast]))
+
+(defn- follow-button [ctx u following? reload!]
+  (mgl/MongolTextButton
+   .onPressed
+   (fn []
+     (store/require-auth!
+      (fn []
+        (-> (if following? (api/unfollow! (:id u)) (api/follow! (:id u)))
+            (.then (fn [_]
+                     (when (.-mounted ^m/BuildContext ctx)
+                       (reload!))
+                     nil))
+            (.catchError (fn [e]
+                           (when (.-mounted ^m/BuildContext ctx)
+                             (toast/error! ctx e))
+                           nil))))))
+   .child (mg/text (if following? "unfollow" "follow")
+                   {:size 13.0 :color theme/accent})))
+
+(defn- aside [ctx data me? reload!]
+  (let [u (:user data)
+        following? (boolean (:following u))]
+    (m/Column
+     .mainAxisSize m.MainAxisSize/min
+     .children
+     [(mg/text (or (:display-name u) (:username u) "") {:size 20.0})
+      (m/SizedBox .height 12.0)
+      (if (:follower-count u)
+        (mg/muted (str (:follower-count u) " · " (:following-count u)))
+        (m/SizedBox.shrink))
+      (if (and (not me?) u)
+        (follow-button ctx u following? reload!)
+        (m/SizedBox.shrink))
+      (if me?
+        (mgl/MongolTextButton
+         .onPressed #(store/set-nav! "bookmarks")
+         .child (mg/muted "bookmarks"))
+        (m/SizedBox.shrink))
+      (if me?
+        (mgl/MongolTextButton
+         .onPressed #(api/logout!)
+         .child (mg/muted "logout"))
+        (m/SizedBox.shrink))])))
+
+(defn- contents [data me?]
+  (let [items (concat (:articles data)
+                      (:questions data)
+                      (:answers data)
+                      (when me? (:drafts data)))]
+    (if (empty? items)
+      (asy/empty-state "Nothing published yet")
+      (cards/strip items))))
+
+(defn- profile-for [uname me?]
+  (f/widget
+   ;; Keyed on the username so viewing a different profile refetches instead of
+   ;; reusing the previous one's State.
+   :key uname
+   :context ctx
+   :let [!st (atom {:status :loading})
+         reload! (fn [] (asy/load! ctx !st (api/profile uname)) nil)
+         _ (reload!)]
+   :watch [st !st]
+   (asy/section (aside ctx (:data st) me? reload!)
+                !st
+                (fn [data] (contents data me?))
+                :retry reload!)))
+
+(defn page
+  ([] (page nil))
+  ([username]
+   (f/widget
+    :watch [{:keys [user]} store/session]
+    (let [uname (or username (:username user))
+          me? (and user (= uname (:username user)))]
+      (if uname
+        (profile-for uname me?)
+        (sign-in/prompt "Sign in to see your profile"))))))

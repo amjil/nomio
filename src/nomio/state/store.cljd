@@ -1,0 +1,164 @@
+(ns nomio.state.store
+  "UI + session atoms. Content lives behind nomio.core.api."
+  (:require ["package:flutter/material.dart" :as m]
+            ["package:shared_preferences/shared_preferences.dart" :as sp]
+            ["dart:convert" :as convert]
+            [clojure.string :as str]))
+
+(def ^:private session-pref "nomio_session_v1")
+
+(defonce nav-key (#/(m/GlobalKey m/NavigatorState)))
+
+(defonce app-ui
+  (atom {:selected-nav-id "home"
+         :explore-tab "articles"
+         :questions-filter :all}))
+
+(defonce session
+  (atom {:user nil
+         :token nil}))
+
+(defonce ^:private !title-cache (atom {}))
+
+;; Only feeds wikilink autocomplete and resolution, so it can forget freely.
+;; Without a ceiling an infinite scroll would grow it a page at a time and
+;; never give any of it back.
+(def ^:private title-cache-limit 500)
+
+(defn current-user []
+  (:user @session))
+
+(defn signed-in? []
+  (some? (:user @session)))
+
+(defn set-nav! [id]
+  (swap! app-ui assoc :selected-nav-id id)
+  nil)
+
+(defn set-questions-filter! [flt]
+  (swap! app-ui assoc :questions-filter flt)
+  nil)
+
+(defn- user->json [u]
+  (when u
+    (reduce-kv (fn [acc k v]
+                 (assoc acc (if (keyword? k) (name k) (str k)) v))
+               {} u)))
+
+(defn- user<-json [m]
+  (when m
+    (letfn [(walk [x]
+              (cond
+                (dart/is? x dart:core/Map)
+                (reduce (fn [acc ^String k]
+                          (assoc acc (keyword (str/replace k "_" "-")) (walk (get x k))))
+                        {}
+                        (.-keys x))
+                (dart/is? x dart:core/Iterable)
+                (mapv walk x)
+                :else x))]
+      (walk m))))
+
+(defn persist-session! []
+  (-> (.getInstance sp/SharedPreferences)
+      (.then (fn [prefs]
+               (let [tok (:token @session)
+                     u (:user @session)]
+                 (if (and (seq tok) u)
+                   (.setString prefs session-pref
+                               (convert/jsonEncode
+                                {"token" tok
+                                 "user" (user->json u)}))
+                   (.remove prefs session-pref)))))
+      (.catchError (fn [e]
+                     (dart:core/print (str "session persist failed: " e))
+                     nil)))
+  nil)
+
+(defn load-session!
+  []
+  (-> (.getInstance sp/SharedPreferences)
+      (.then (fn [prefs]
+               (let [raw (.getString prefs session-pref)]
+                 (when (seq raw)
+                   (let [data (convert/jsonDecode raw)
+                         token (get data "token")
+                         user (user<-json (get data "user"))]
+                     (when (and (seq token) user)
+                       (swap! session assoc :user user :token token))))
+               true)))
+      (.catchError (fn [_] true))))
+
+(defn set-session! [user token]
+  (swap! session assoc :user user :token token)
+  (persist-session!)
+  nil)
+
+(defn clear-session! []
+  (swap! session assoc :user nil :token nil)
+  (persist-session!)
+  nil)
+
+(defn remember-titles!
+  "Cache enough of each listed content to resolve a wikilink target to a route.
+   Accumulates across pages, so loading page 2 does not drop page 1."
+  [contents]
+  (let [fresh (into {}
+                    (keep (fn [c]
+                            (when (seq (:title c))
+                              [(:title c) (select-keys c [:title :slug :id :type])])))
+                    contents)]
+    (swap! !title-cache
+           (fn [cache]
+             (let [merged (into cache fresh)]
+               ;; Insertion order is not tracked, so there is no oldest entry to
+               ;; evict — an overflow keeps just the batch that caused it.
+               ;; Autocomplete narrows for a moment; links in view still resolve.
+               (if (> (count merged) title-cache-limit) fresh merged)))))
+  nil)
+
+(defn title-suggestions []
+  (vec (keys @!title-cache)))
+
+(defn resolve-title
+  "Cached content whose title matches exactly, or nil."
+  [title]
+  (get @!title-cache title))
+
+(defn navigator []
+  (.-currentState nav-key))
+
+(defn push-named!
+  ([route] (push-named! route nil))
+  ([route args]
+   (when-let [nav (navigator)]
+     (if args
+       (.pushNamed nav route .arguments args)
+       (.pushNamed nav route)))
+   nil))
+
+(defn pop! []
+  (when-let [nav (navigator)]
+    (when (.-canPop nav)
+      (.pop nav)))
+  nil)
+
+(defn content-path
+  "Reader route for a content map. Answers have no slug of their own."
+  [c]
+  (case (:type c)
+    :question (str "/questions/" (or (:slug c) (:id c)))
+    :answer (str "/answers/" (:id c))
+    (str "/articles/" (or (:slug c) (:id c)))))
+
+(defn open-content! [c]
+  (push-named! (content-path c))
+  nil)
+
+(defn require-auth!
+  "If signed in, run `ok-fn`. Otherwise push login."
+  [ok-fn]
+  (if (signed-in?)
+    (ok-fn)
+    (push-named! "/login"))
+  nil)

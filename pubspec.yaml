@@ -37,6 +37,7 @@ dependencies:
   mongol: ^9.2.1
   mongol_code: ^1.0.5
   vibration: ^3.1.8
+  custom_refresh_indicator: ^4.0.1
   http: ^1.6.0
   flutter_styled_toast: ^2.3.0
   mgl_editor_core:

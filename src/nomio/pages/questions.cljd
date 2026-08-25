@@ -1,0 +1,34 @@
+(ns nomio.pages.questions
+  (:require [cljd.flutter :as f]
+            [nomio.core.api :as api]
+            [nomio.state.store :as store]
+            [nomio.widgets.content-card :as cards]
+            [nomio.widgets.filter-bar :as filter-bar]
+            [nomio.widgets.paged :as paged]))
+
+;; GET /questions already orders by published_at desc, so a "Latest" chip would
+;; return exactly what "All" does. Bring it back if the API grows a sort param.
+(def ^:private filters
+  [[:all "All"]
+   [:unanswered "Unanswered"]])
+
+(defn page []
+  (f/widget
+   :context ctx
+   :let [initial (or (:questions-filter @store/app-ui) :all)
+         !flt (atom initial)
+         !st (paged/state)
+         ;; Indirect through the atom so the strip's scroll listener keeps
+         ;; paging the filter that is actually on screen.
+         fetch (fn [opts]
+                 (if (= @!flt :unanswered)
+                   (api/unanswered opts)
+                   (api/list-questions opts)))
+         show! (fn [flt]
+                 (reset! !flt flt)
+                 (store/set-questions-filter! flt)
+                 nil)
+         apply! (fn [flt] (show! flt) (paged/reload! ctx !st fetch) nil)
+         _ (apply! initial)]
+   (paged/section (filter-bar/single-select filters initial apply!)
+                  !st fetch cards/card)))

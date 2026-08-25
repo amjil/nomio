@@ -1,0 +1,40 @@
+(ns nomio.theme
+  "Shared UI tokens — dark writing surface, matching mgl-notes-app."
+  (:require ["package:flutter/material.dart" :as m]))
+
+(def font-family "OyunQaganTig")
+
+(def bg (m/Color 0xFF121212))
+(def surface (m/Color 0xFF1E1E1E))
+(def ink (m/Color 0xFFF5F5F5))
+(def ink-muted (m/Color 0xFFD0D0D0))
+(def ink-faint (m/Color 0x99FFFFFF))
+(def accent (m/Color 0xFF64B5F6))
+(def divider (m/Color 0x22FFFFFF))
+(def danger (m/Color 0xFFEF9A9A))
+
+(defn text
+  ([size] (text size ink))
+  ([size color]
+   (m/TextStyle .fontSize (double size)
+                .color color
+                .fontFamily font-family)))
+
+(defn app-theme []
+  (m/ThemeData
+   .useMaterial3 true
+   .brightness m.Brightness/dark
+   .fontFamily font-family
+   .primarySwatch m.Colors/blue
+   .scaffoldBackgroundColor bg
+   .colorScheme (m.ColorScheme/fromSeed
+                 .seedColor accent
+                 .brightness m.Brightness/dark)
+   .appBarTheme (m/AppBarTheme
+                 .backgroundColor surface
+                 .foregroundColor ink
+                 .elevation 0.0)
+   .dividerColor divider
+   .iconTheme (m/IconThemeData .color ink .size 22.0)
+   .textTheme (m/TextTheme
+               .bodyMedium (text 16.0 ink))))

@@ -1,0 +1,229 @@
+(ns nomio.widgets.paged
+  "Infinite-scroll version of the horizontal card strip.
+
+   A fetch resolves to {:items [...] :has-more bool}, where :has-more is the
+   server's meta. Feeds still get de-duplicated by id, which both guards against
+   an endpoint that ignores the window and lets the strip end cleanly if the
+   meta is ever missing."
+  (:require ["package:flutter/material.dart" :as m]
+            [cljd.flutter :as f]
+            [nomio.theme :as theme]
+            [nomio.widgets.async :as asy]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.refresh :as rfr]))
+
+(def ^:private page-size 20)
+
+;; Start loading this far (in px) before the trailing edge.
+(def ^:private prefetch-extent 600.0)
+
+;; :gen rises whenever the feed underneath changes — a new tab, a reload, a
+;; refresh. A response carrying a stale :gen is dropped, so a slow page-2 that
+;; lands after the reader switched tabs cannot append to the wrong list.
+(def ^:private blank
+  {:items [] :status :idle :error nil :done? false :offset 0 :gen 0})
+
+(defn- restart
+  "Back to empty, but on a new generation so replies to the old one are ignored."
+  [st]
+  (assoc blank :gen (inc (:gen st))))
+
+;; :loading is the only one that blanks the strip — it means nothing is on
+;; screen yet. :paging appends, :refreshing replaces under the existing cards.
+(def ^:private in-flight #{:loading :paging :refreshing})
+
+(defn state []
+  (atom blank))
+
+(defn clear!
+  "Empties the strip and abandons any reply still in flight. For a feed whose
+   input went away, like a search box the reader emptied."
+  [!st]
+  (swap! !st restart)
+  nil)
+
+(defn- ended?
+  "The server's own answer wins. A page with nothing unseen in it ends the feed
+   regardless — an endpoint that ignores the window would otherwise loop — and
+   a short page is the fallback when no meta came back at all."
+  [page fresh n]
+  (cond
+    (empty? fresh) true
+    (contains? page :has-more) (not (:has-more page))
+    :else (< n page-size)))
+
+(defn- absorb [st page]
+  (let [items (:items page)
+        seen (into #{} (map :id) (:items st))
+        fresh (into [] (remove #(contains? seen (:id %))) items)]
+    (assoc st
+           :status :ok
+           :error nil
+           :items (into (:items st) fresh)
+           :offset (+ (:offset st) (count items))
+           :done? (ended? page fresh (count items)))))
+
+(defn- current?
+  "A reply is worth keeping only if its generation is still on screen — and only
+   if the strip itself is, since writing to a disposed State crashes."
+  [ctx !st g]
+  (and (.-mounted ^m/BuildContext ctx) (= g (:gen @!st))))
+
+(defn load-more!
+  "Fetches the next window unless one is already in flight or the feed ended.
+   `fetch` takes {:limit n :offset n} and resolves to {:items [...] :has-more b}.
+   Returns the in-flight future, or nil when the call was a no-op."
+  [ctx !st fetch]
+  (let [{:keys [status done? offset items gen]} @!st]
+    (when-not (or done? (contains? in-flight status))
+      (swap! !st assoc :status (if (empty? items) :loading :paging))
+      (-> (fetch {:limit page-size :offset offset})
+          (.then (fn [page]
+                   (when (current? ctx !st gen)
+                     (swap! !st absorb page))
+                   nil))
+          (.catchError (fn [e]
+                         (when (current? ctx !st gen)
+                           (swap! !st assoc :status :error :error e))
+                         nil))))))
+
+(defn reload!
+  "Drops everything and fetches the first window again."
+  [ctx !st fetch]
+  (swap! !st restart)
+  (load-more! ctx !st fetch))
+
+(defn refresh!
+  "Refetches the first window while leaving the current cards on screen, and
+   returns that future — a pull-to-refresh indicator animates until it settles,
+   so the strip it is attached to has to stay mounted meanwhile."
+  [ctx !st fetch]
+  (let [g (inc (:gen @!st))]
+    (swap! !st assoc :status :refreshing :gen g)
+    (-> (fetch {:limit page-size :offset 0})
+        (.then (fn [page]
+                 (when (current? ctx !st g)
+                   (swap! !st (fn [st] (absorb (assoc blank :gen (:gen st)) page))))
+                 nil))
+        (.catchError (fn [e]
+                       (when (current? ctx !st g)
+                         (swap! !st assoc :status :error :error e))
+                       nil)))))
+
+(defn- near-end? [^m/ScrollController ctrl]
+  (and (.-hasClients ctrl)
+       (let [pos (.-position ctrl)]
+         (>= (.-pixels pos) (- (.-maxScrollExtent pos) prefetch-extent)))))
+
+(defn- attach-scroll
+  "Bundles the controller with its listener so both can be torn down together."
+  [ctx !st fetch]
+  (let [ctrl (m/ScrollController.)
+        on-scroll (fn [] (when (near-end? ctrl) (load-more! ctx !st fetch)) nil)]
+    (.addListener ctrl on-scroll)
+    {:ctrl ctrl :on-scroll on-scroll}))
+
+;; :managed threads the :dispose value, so it has to be a symbol.
+(defn- detach-scroll! [{:keys [ctrl on-scroll]}]
+  (.removeListener ^m/ScrollController ctrl on-scroll)
+  (.dispose ^m/ScrollController ctrl)
+  nil)
+
+(defn- vacant
+  "An empty feed still needs a way back. The pull gesture lives on the list, so
+   with no cards to drag there would otherwise be no way to refetch at all —
+   and a screen like /tags/:slug has no heading button to fall back on."
+  [retry]
+  (m/Center
+   .child
+   (m/Row
+    .mainAxisSize m.MainAxisSize/min
+    .children
+    [(mg/muted "Nothing here yet")
+     (m/IconButton
+      .icon (m/Icon m.Icons/refresh .color theme/accent)
+      .onPressed retry)])))
+
+(defn- trailer [st retry]
+  (cond
+    (= :paging (:status st))
+    (m/Padding
+     .padding (m.EdgeInsets/symmetric .horizontal 24.0)
+     .child (m/Center .child (m/SizedBox .width 20.0 .height 20.0
+                                         .child (m/CircularProgressIndicator .strokeWidth 2.0))))
+
+    (= :error (:status st))
+    (m/Padding
+     .padding (m.EdgeInsets/symmetric .horizontal 16.0)
+     .child (m/Center
+             .child (m/IconButton
+                     .icon (m/Icon m.Icons/refresh)
+                     .onPressed retry)))
+
+    :else (m/SizedBox.shrink)))
+
+(defn strip
+  "Horizontal strip of `card-fn` items that pulls the next page as it nears the
+   trailing edge, and refetches from scratch when dragged to the right."
+  [!st fetch card-fn]
+  (f/widget
+   :context ctx
+   :managed [scroll (attach-scroll ctx !st fetch) :dispose detach-scroll!]
+   :watch [st !st]
+   (let [items (:items st)
+         n (count items)
+         ;; A trailing slot costs a separator too, so it is only worth adding
+         ;; while there is something to put in it.
+         tail? (contains? #{:paging :error} (:status st))
+         more! (fn [] (load-more! ctx !st fetch) nil)
+         again! (fn [] (reload! ctx !st fetch) nil)]
+     (cond
+       (and (empty? items) (= :error (:status st)))
+       (asy/view !st (fn [_] (asy/empty-state)) :retry again!)
+
+       (empty? items)
+       (if (= :loading (:status st)) (asy/spinner) (vacant again!))
+
+       :else
+       (rfr/strip
+        {:scroll-controller (:ctrl scroll)
+         :item-count (if tail? (inc n) n)
+         :item-builder (fn [_ i]
+                         (if (< (int i) n)
+                           (card-fn (nth items (int i)))
+                           (trailer st more!)))
+         :on-refresh (fn [] (refresh! ctx !st fetch))})))))
+
+(defn section
+  "Left-hand column beside a paginated strip — the paged counterpart of
+   asy/section."
+  [aside !st fetch card-fn]
+  (m/Row
+   .crossAxisAlignment m.CrossAxisAlignment/start
+   .children
+   [(m/Padding
+     .padding (m.EdgeInsets/all 16.0)
+     .child aside)
+    (m/Expanded .child (strip !st fetch card-fn))]))
+
+(defn- heading
+  "Pointer users have no pull gesture, so the title doubles as a refresh button."
+  [title on-reload]
+  (m/Column
+   .mainAxisSize m.MainAxisSize/min
+   .children
+   [(mg/text title {:size 20.0 :weight m.FontWeight/bold})
+    (m/SizedBox .height 12.0)
+    (m/IconButton
+     .icon (m/Icon m.Icons/refresh)
+     .onPressed on-reload)]))
+
+(defn list-page
+  "Heading beside a paginated strip — the paged counterpart of asy/list-page."
+  [title fetch card-fn]
+  (f/widget
+   :context ctx
+   :let [!st (state)
+         _ (load-more! ctx !st fetch)]
+   (section (heading title (fn [] (reload! ctx !st fetch) nil))
+            !st fetch card-fn)))

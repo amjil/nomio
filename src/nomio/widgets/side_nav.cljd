@@ -1,0 +1,52 @@
+(ns nomio.widgets.side-nav
+  (:require ["package:flutter/material.dart" :as m]
+            ["package:mongol/mongol.dart" :as mgl]
+            [cljd.flutter :as f]
+            [nomio.state.store :as store]
+            [nomio.theme :as theme]))
+
+(def tabs
+  [{:id "home" :icon m.Icons/home_outlined :selected-icon m.Icons/home :label "Home"}
+   {:id "explore" :icon m.Icons/explore_outlined :selected-icon m.Icons/explore :label "Explore"}
+   {:id "articles" :icon m.Icons/article_outlined :selected-icon m.Icons/article :label "Articles"}
+   {:id "questions" :icon m.Icons/help_outline :selected-icon m.Icons/help :label "Questions"}
+   {:id "search" :icon m.Icons/search :selected-icon m.Icons/search :label "Search"}
+   {:id "create" :icon m.Icons/edit_outlined :selected-icon m.Icons/edit :label "Write"}
+   {:id "bookmarks" :icon m.Icons/bookmark_border :selected-icon m.Icons/bookmark :label "Bookmarks"}
+   {:id "notifications" :icon m.Icons/notifications_none :selected-icon m.Icons/notifications :label "Notify"}
+   {:id "profile" :icon m.Icons/person_outline :selected-icon m.Icons/person :label "Profile"}])
+
+(def mobile-tabs
+  [{:id "home" :icon m.Icons/home_outlined :selected-icon m.Icons/home :label "Home"}
+   {:id "explore" :icon m.Icons/explore_outlined :selected-icon m.Icons/explore :label "Explore"}
+   {:id "create" :icon m.Icons/edit_outlined :selected-icon m.Icons/edit :label "Write"}
+   {:id "notifications" :icon m.Icons/notifications_none :selected-icon m.Icons/notifications :label "Notify"}
+   {:id "profile" :icon m.Icons/person_outline :selected-icon m.Icons/person :label "Profile"}])
+
+(defn- rail-for [tab-list]
+  (f/widget
+   :watch [selected-nav-id (f/sub store/app-ui :selected-nav-id)]
+   (let [idx (or (first (keep-indexed (fn [i t] (when (= (:id t) selected-nav-id) i)) tab-list)) 0)]
+     (m/NavigationRail
+      .backgroundColor theme/surface
+      .selectedIndex (int idx)
+      .labelType m.NavigationRailLabelType/all
+      .groupAlignment -1.0
+      .scrollable true
+      .onDestinationSelected
+      (fn [i]
+        (store/set-nav! (:id (nth tab-list (int i)))))
+      .destinations
+      (mapv (fn [{:keys [icon selected-icon label]}]
+              (m/NavigationRailDestination
+               .icon (m/Icon icon)
+               .selectedIcon (m/Icon selected-icon)
+               .label (m/Padding
+                       .padding (m.EdgeInsets/only .top 8.0)
+                       .child
+                       (mgl/MongolText label
+                                       .style (m/TextStyle .fontFamily theme/font-family
+                                                           .fontSize 14.0)))))
+            tab-list)))))
+(defn rail []
+  (rail-for tabs))

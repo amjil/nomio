@@ -1,0 +1,72 @@
+(ns nomio.pages.search
+  (:require ["package:flutter/material.dart" :as m]
+            ["dart:async" :as async]
+            [cljd.flutter :as f]
+            [clojure.string :as str]
+            [nomio.core.api :as api]
+            [nomio.theme :as theme]
+            [nomio.widgets.content-card :as cards]
+            [nomio.widgets.keyboard :as kb]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.paged :as paged]
+            [rich-editor.components.text-field :as custom-tf]))
+
+(defonce ^:private !ime (atom {:external-keyboard-delegate nil}))
+
+(def ^:private debounce (dart:core/Duration. .milliseconds 250))
+
+(defn- cancel-timer-atom! [!t]
+  (when-let [t @!t] (.cancel ^async/Timer t))
+  nil)
+
+(defn page []
+  (f/widget
+   :context ctx
+   :let [!query (atom "")
+         !results (paged/state)
+         !timer (atom nil)
+
+         ;; Reading the query from the atom keeps this function identity stable
+         ;; for the strip's scroll listener, and paged's generation counter is
+         ;; what stops a slow reply to an earlier query from landing late.
+         fetch (fn [opts] (api/search @!query opts))
+
+         run! (fn [q]
+                (reset! !query q)
+                (if (str/blank? q)
+                  (paged/clear! !results)
+                  (paged/reload! ctx !results fetch))
+                nil)
+
+         schedule! (fn [v]
+                     (cancel-timer-atom! !timer)
+                     (reset! !timer (async/Timer. debounce #(run! v)))
+                     nil)]
+
+   :managed [ctrl (m/TextEditingController.)
+             focus (m/FocusNode.)
+             _ !timer :dispose cancel-timer-atom!]
+
+   :watch [query !query]
+   (kb/wrap
+    (m/Row
+     .crossAxisAlignment m.CrossAxisAlignment/start
+     .children
+     [(m/Padding
+       .padding (m.EdgeInsets/all 16.0)
+       .child
+       (custom-tf/text-field
+        !ime
+        {:controller ctrl
+         :focus-node focus
+         :hint "Search"
+         :max-lines 1
+         :on-changed (fn [v] (schedule! (or v "")))
+         :style (m/TextStyle .color theme/ink .fontFamily theme/font-family)
+         :decoration (m/InputDecoration .border m/InputBorder.none)}))
+
+      (m/Expanded
+       .child
+       (if (str/blank? query)
+         (m/Center .child (mg/muted "Type to search"))
+         (paged/strip !results fetch cards/card)))]))))

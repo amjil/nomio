@@ -1,0 +1,157 @@
+(ns nomio.pages.answer
+  (:require ["package:flutter/material.dart" :as m]
+            ["dart:async" :as async]
+            [cljd.flutter :as f]
+            [nomio.content.reader :as nreader]
+            [nomio.core.api :as api]
+            [nomio.state.store :as store]
+            [nomio.theme :as theme]
+            [nomio.widgets.async :as asy]
+            [nomio.widgets.comments :as comments]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.toast :as toast]))
+
+(defn- vote-col [a !a ctx]
+  (let [score (or (:vote-score a) 0)
+        mine (:my-vote a)]
+    (m/Column
+     .mainAxisSize m.MainAxisSize/min
+     .children
+     [(m/IconButton
+       .icon (m/Icon m.Icons/keyboard_arrow_up
+                     .color (when (= mine 1) theme/accent))
+       .onPressed
+       (fn []
+         (store/require-auth!
+          (fn []
+            (-> (if (= mine 1)
+                  (api/unvote! (:id a))
+                  (api/vote! (:id a) 1))
+                (.then (fn [res]
+                         (when (.-mounted ^m/BuildContext ctx)
+                           (swap! !a assoc
+                                  :my-vote (:my-vote res)
+                                  :vote-score (:vote-score res)))
+                         nil))
+                (.catchError (fn [e]
+                               (when (.-mounted ^m/BuildContext ctx)
+                                 (toast/error! ctx e))
+                               nil)))))))
+      (mg/text (str score) {:size 16.0})
+      (m/IconButton
+       .icon (m/Icon m.Icons/keyboard_arrow_down
+                     .color (when (= mine -1) theme/accent))
+       .onPressed
+       (fn []
+         (store/require-auth!
+          (fn []
+            (-> (if (= mine -1)
+                  (api/unvote! (:id a))
+                  (api/vote! (:id a) -1))
+                (.then (fn [res]
+                         (when (.-mounted ^m/BuildContext ctx)
+                           (swap! !a assoc
+                                  :my-vote (:my-vote res)
+                                  :vote-score (:vote-score res)))
+                         nil))
+                (.catchError (fn [e]
+                               (when (.-mounted ^m/BuildContext ctx)
+                                 (toast/error! ctx e))
+                               nil)))))))])))
+
+(defn- screen* [a q]
+  (f/widget
+   :context ctx
+   :get [m/Navigator]
+   :let [!a (atom a)
+         !comments (asy/load! ctx (api/comments "answer" (:id a)))
+         !reply (atom nil)]
+   :watch [ans !a]
+   (m/Scaffold
+    .backgroundColor theme/bg
+    .appBar
+    (m/AppBar
+     .leading (m/IconButton
+               .icon (m/Icon m.Icons/arrow_back)
+               .onPressed #(.pop navigator))
+     .actions
+     [(if (= (:id (store/current-user)) (:author-id ans))
+        (m/IconButton
+         .icon (m/Icon m.Icons/edit)
+         .onPressed #(store/push-named! (str "/content/" (:id ans) "/edit")))
+        (m/SizedBox.shrink))])
+    .body
+    (m/SafeArea
+     .child
+     (m/Row
+      .crossAxisAlignment m.CrossAxisAlignment/start
+      .children
+      [;; --- 1. Left meta: no fixed width; natural size + spacing ---
+       (m/Padding
+        .padding (m.EdgeInsets/all 16.0)
+        .child
+        (m/Column
+         .mainAxisSize m.MainAxisSize/min
+         .children
+         [(mg/muted "Question")
+          (m/GestureDetector
+           .onTap (when q
+                    #(store/push-named! (str "/questions/" (or (:slug q) (:id q)))))
+           .child (mg/text (or (:title q) "") {:size 16.0}))
+          (m/SizedBox .height 16.0)
+          (mg/text "Answer" {:size 14.0 :color theme/accent})
+          (mg/muted (or (get-in ans [:author :display-name]) ""))
+          (m/SizedBox .height 12.0)
+          (vote-col ans !a ctx)]))
+       
+       ;; --- 2. Middle: answer body (.flex 3) ---
+       (m/Expanded .flex 3 .child (nreader/widget (:document ans)))
+       
+       ;; --- 3. Right comments: .flex 2 instead of fixed width ---
+       (m/Expanded
+        .flex 2
+        .child
+        (m/Column
+         .children
+         [;; Top: comment list, ~2/3 of vertical space
+          (m/Expanded
+           .flex 2
+           .child (asy/view !comments
+                            #(comments/tree % (fn [pid] (reset! !reply pid) nil))))
+          
+          ;; Bottom: composer needs bounded height (contains Expanded).
+          ;; Expanded takes ~1/3 remaining height (replaces hardcoded height 160.0)
+          (m/Expanded
+           .flex 1
+           .child 
+           (m/Padding
+            .padding (m.EdgeInsets/only .bottom 16.0)
+            .child
+            (comments/composer
+             :answer (:id ans)
+             :!reply-to !reply
+             :on-posted (fn []
+                          (asy/load! ctx !comments (api/comments "answer" (:id ans)))
+                          nil))))]))])))))
+
+(defn- fetch
+  "An answer plus its parent question. A missing question still renders the
+   answer, so that lookup failing is not an error for the page."
+  [id]
+  (-> (api/get-content id)
+      (.then (fn [a]
+               (if (:question-id a)
+                 (-> (api/get-content (:question-id a))
+                     (.then (fn [q] {:a a :q q}))
+                     (.catchError (fn [_] {:a a :q nil})))
+                 (async/Future.value {:a a :q nil}))))))
+
+(defn screen [id]
+  (f/widget
+   :context ctx
+   :let [!st (atom {:status :loading})
+         reload! (fn [] (asy/load! ctx !st (fetch id)) nil)
+         _ (reload!)]
+   (asy/screen !st
+               (fn [{:keys [a q]}] (screen* a q))
+               :retry reload!)))

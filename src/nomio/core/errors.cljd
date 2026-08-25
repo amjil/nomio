@@ -1,0 +1,26 @@
+(ns nomio.core.errors
+  "Turns transport / API failures into text worth showing a reader.
+
+   nomio.core.http throws Exception with one of the sentinel codes below, or
+   with a message lifted from the API response body."
+  (:require [clojure.string :as str]))
+
+(def unauthorized "unauthorized")
+(def timeout "timeout")
+(def offline "offline")
+
+(defn- bare
+  "Dart stringifies Exception as \"Exception: msg\"."
+  [e]
+  (-> (str e)
+      (str/replace #"^(Exception|_Exception|Error):\s*" "")
+      str/trim))
+
+(defn message [e]
+  (let [s (bare e)]
+    (cond
+      (= s unauthorized) "Session expired — please sign in again"
+      (= s timeout) "The server took too long to respond"
+      (= s offline) "No network connection"
+      (str/blank? s) "Something went wrong"
+      :else s)))

@@ -1,0 +1,142 @@
+(ns nomio.pages.question
+  (:require ["package:flutter/material.dart" :as m]
+            ["package:mongol/mongol.dart" :as mgl]
+            [cljd.flutter :as f]
+            [nomio.content.reader :as nreader]
+            [nomio.core.api :as api]
+            [nomio.state.store :as store]
+            [nomio.theme :as theme]
+            [nomio.widgets.async :as asy]
+            [nomio.widgets.comments :as comments]
+            [nomio.widgets.content-card :as cards]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.paged :as paged]
+            [nomio.widgets.toast :as toast]))
+
+(defn- write-answer! [ctx q]
+  (store/require-auth!
+   (fn []
+     (-> (api/create-content! {:type* :answer
+                               :title (str "A: " (:title q))
+                               :question-id (:id q)})
+         (.then (fn [a]
+                  (when (.-mounted ^m/BuildContext ctx)
+                    (store/push-named! (str "/content/" (:id a) "/edit")))
+                  nil))
+         (.catchError (fn [e]
+                        (when (.-mounted ^m/BuildContext ctx)
+                          (toast/error! ctx e))
+                        nil)))))
+  nil)
+
+(defn- screen* [q]
+  (f/widget
+   :context ctx
+   :get [m/Navigator]
+   :let [!q (atom q)
+         ;; The endpoint windows at 20, so a popular question needs paging or
+         ;; its later answers simply never appear.
+         answers-fetch (fn [opts] (api/answers (:id q) opts))
+         !answers (paged/state)
+         _ (paged/load-more! ctx !answers answers-fetch)
+         !comments (asy/load! ctx (api/comments "question" (:id q)))
+         !reply (atom nil)]
+   :watch [content !q]
+   (let [mine? (= (:id (store/current-user)) (:author-id content))
+         liked? (boolean (:liked content))]
+     (m/Scaffold
+      .backgroundColor theme/bg
+      .appBar
+      (m/AppBar
+       .leading (m/IconButton
+                 .icon (m/Icon m.Icons/arrow_back)
+                 .onPressed #(.pop navigator))
+       .actions
+       [(if mine?
+          (m/IconButton
+           .icon (m/Icon m.Icons/edit)
+           .onPressed #(store/push-named! (str "/content/" (:id content) "/edit")))
+          (m/SizedBox.shrink))
+        (m/IconButton
+         .icon (m/Icon (if liked? m.Icons/favorite m.Icons/favorite_border)
+                       .color (when liked? theme/accent))
+         .onPressed
+         (fn []
+           (store/require-auth!
+            (fn []
+              (-> (api/toggle-like! (:id content) liked?)
+                  (.then (fn [res]
+                           (when (.-mounted ^m/BuildContext ctx)
+                             (swap! !q assoc
+                                    :liked (:liked res)
+                                    :like-count (:like-count res)))
+                           nil))
+                  (.catchError (fn [e]
+                                 (when (.-mounted ^m/BuildContext ctx)
+                                   (toast/error! ctx e))
+                                 nil)))))))
+        (mgl/MongolTextButton
+         .onPressed #(write-answer! ctx content)
+         .child (mg/text "answer" {:size 13.0 :color theme/accent}))])
+      .body
+      (m/SafeArea
+       .child
+       (m/Row
+        .crossAxisAlignment m.CrossAxisAlignment/start
+        .children
+        [;; --- 1. Left meta: natural Padding, no fixed width ---
+         (m/Padding
+          .padding (m.EdgeInsets/all 16.0)
+          .child
+          (m/Column
+           .mainAxisSize m.MainAxisSize/min
+           .children
+           [(mg/text (or (:title content) "") {:size 18.0 :weight m.FontWeight/bold})
+            (m/SizedBox .height 8.0)
+            (mg/muted (or (get-in content [:author :display-name]) ""))]))
+         
+         ;; --- 2. Q&A body: main content (flex 3) ---
+         (m/Expanded .flex 3 .child (nreader/widget (:document content)))
+         
+         ;; --- 3. Answers list: flex 2 instead of fixed 220.0 ---
+         (m/Expanded
+          .flex 2
+          .child
+          (m/Column
+           .children
+           [(m/Padding
+             .padding (m.EdgeInsets/all 12.0)
+             .child (mg/text "answers" {:size 14.0}))
+            (m/Expanded .child (paged/strip !answers answers-fetch cards/card))]))
+         
+         ;; --- 4. Comments: flex 2, split height internally ---
+         (m/Expanded
+          .flex 2
+          .child
+          (m/Column
+           .children
+           [;; Top: comment list
+            (m/Expanded
+             .flex 2
+             .child (asy/view !comments
+                              #(comments/tree % (fn [pid] (reset! !reply pid) nil))))
+            ;; Bottom: reply box; flex 1 fills remaining height (replaces .height 160.0)
+            (m/Expanded
+             .flex 1
+             .child
+             (m/Padding
+              .padding (m.EdgeInsets/only .bottom 16.0)
+              .child (comments/composer
+                      :question (:id content)
+                      :!reply-to !reply
+                      :on-posted (fn []
+                                   (asy/load! ctx !comments (api/comments "question" (:id content)))
+                                   nil))))]))]))))))
+
+(defn screen [slug]
+  (f/widget
+   :context ctx
+   :let [!st (atom {:status :loading})
+         reload! (fn [] (asy/load! ctx !st (api/get-content slug)) nil)
+         _ (reload!)]
+   (asy/screen !st screen* :retry reload!)))

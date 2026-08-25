@@ -1,453 +1,310 @@
 (ns nomio.core.api
-  "Nomio platform core network layer: handles all communication with the Elixir backend.
-   Includes unified parsing, authentication, content management, and Spaced Repetition System (SRS)."
-  (:require
-   ["package:http/http.dart" :as http]
-   ["dart:convert" :as convert]
-   [clojure.string :as str]
-   [nomio.core.state :as state]))
+  "App-facing API → Phoenix /api/v1."
+  (:require ["dart:convert" :as convert]
+            ["dart:async" :as async]
+            [clojure.string :as str]
+            [nomio.content.document :as doc]
+            [nomio.core.http :as http]
+            [nomio.state.store :as store]))
 
-;; =============================================================================
-;; Base Configuration
-;; =============================================================================
+(def base-url http/base-url)
 
-;; Local development address (standard for Android emulators/local network)
-(def base-url "http://100.64.0.6:4000/api")
+(defn- keywordize-enum [x]
+  (cond
+    (keyword? x) x
+    (string? x) (keyword x)
+    :else x))
 
-;; =============================================================================
-;; Helper Functions: Headers & Response Handling
-;; =============================================================================
+(defn- normalize-tags [tags]
+  (mapv (fn [t]
+          (cond
+            (string? t) t
+            (map? t) (or (:slug t) (:name t) "")
+            :else (str t)))
+        (or tags [])))
 
-(defn- get-auth-headers []
-  (let [token (state/current-user-token)] ;; Or however you access your token state
-    (if (and token (not (empty? token)))
-      {"Content-Type" "application/json"
-       "Authorization" (str "Bearer " token)}
-      {"Content-Type" "application/json"})))
+(defn- document->api [state]
+  (when state
+    (convert/jsonDecode (doc/export-json state))))
 
-(defn- parse-response
-  "Parses the HTTP response. Returns the 'data' field or the raw map on success.
-   Throws a clean Exception with details on failure."
-  [^http/Response resp]
-  (let [status (.-statusCode resp)
-        body-str (.-body resp)
-        json-data (try
-                    (if (str/blank? body-str) {} (convert/jsonDecode body-str))
-                    (catch Exception _ {}))]
-    (if (and (>= status 200) (< status 300))
-      ;; Backend usually wraps results in a "data" key, or returns {"ok": true}
-      (get json-data "data" json-data)
+(defn- document-json 
+  "Serialize API/editor document without snake_case mangling."
+  [raw]
+  (cond
+    (nil? raw) nil
+    (string? raw) raw
+    :else
+    (letfn [(walk [v]
+              (cond
+                (keyword? v) (name v)
+                (map? v) (reduce-kv (fn [acc k val]
+                                      (assoc acc (if (keyword? k) (name k) (str k))
+                                             (walk val)))
+                                    {} v)
+                (sequential? v) (mapv walk v)
+                (dart/is? v dart:core/Map)
+                (reduce (fn [acc ^String k]
+                          (assoc acc k (walk (get v k))))
+                        {}
+                        (.-keys v))
+                (dart/is? v dart:core/Iterable)
+                (mapv walk v)
+                :else v))]
+      (convert/jsonEncode (walk raw)))))
 
-      ;; Handle error extraction
-      (let [err-type (get json-data "error")
-            details (get json-data "details")
-            detail-str (when details
-                         (str/join "\n"
-                                   (for [k (.-keys details)]
-                                     (let [v (get details k)
-                                           err-val (if (coll? v) (first v) v)]
-                                       (str k ": " err-val)))))
-            error-msg (cond
-                        (not (str/blank? detail-str)) detail-str
-                        (not (str/blank? err-type)) err-type
-                        :else (str "API Error (" status ")"))]
-        (throw (Exception. error-msg))))))
+(defn- document<-api [raw]
+  (when raw
+    (doc/import-json (document-json raw))))
 
-;; =============================================================================
-;; 0. Authentication (Auth)
-;; =============================================================================
+(defn- normalize-content [c]
+  (when c
+    (cond-> (-> c
+                (update :type keywordize-enum)
+                (update :status keywordize-enum)
+                (update :visibility keywordize-enum)
+                (update :tags normalize-tags))
+      (contains? c :document)
+      (update :document document<-api))))
 
-(defn ^:async login
-  "Authenticates a user via email and password."
-  [payload]
-  (let [uri (Uri/parse (str base-url "/auth/login"))
-        headers {"Content-Type" "application/json" "Accept" "application/json"}
-        api-payload {"email" (or (:email payload) (get payload "email"))
-                     "password" (or (:password payload) (get payload "password"))}
-        body (convert/jsonEncode api-payload)
-        resp (await (http/post uri .headers headers .body body))]
-    (parse-response resp)))
+(defn- data [res]
+  (normalize-content (:data res)))
 
-(defn ^:async register
-  "Registers a new user account."
-  [payload]
-  (let [uri (Uri/parse (str base-url "/auth/register"))
-        headers {"Content-Type" "application/json" "Accept" "application/json"}
-        api-payload {"username" (or (:username payload)
-                                    (get payload "username")
-                                    (:handle payload)
-                                    (get payload "handle"))
-                     "nickname" (or (:nickname payload)
-                                    (get payload "nickname")
-                                    (:display-name payload)
-                                    (get payload "display_name")
-                                    (:name payload)
-                                    (get payload "name"))
-                     "email" (or (:email payload) (get payload "email"))
-                     "password" (or (:password payload) (get payload "password"))}
-        body (convert/jsonEncode api-payload)
-        resp (await (http/post uri .headers headers .body body))]
-    (parse-response resp)))
+(defn- data-list [res]
+  (let [items (mapv normalize-content (or (:data res) []))]
+    (store/remember-titles! items)
+    items))
 
-(defn ^:async fetch-me
-  "Fetches current user profile by token."
+(defn- page-of
+  "A window plus the server's own end-of-feed answer. `:has-more` is left out
+   when the endpoint sends no meta, so the caller can fall back to guessing."
+  [items res]
+  (cond-> {:items items}
+    (contains? (:meta res) :has-more)
+    (assoc :has-more (boolean (get-in res [:meta :has-more])))))
+
+(defn- data-page [res]
+  (page-of (data-list res) res))
+
+(defn- ok [x] (async/Future.value x))
+
+(defn init!
+  "Restores a stored session and revalidates the token before the UI mounts."
   []
-  (let [uri (Uri/parse (str base-url "/users/me"))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+  (-> (store/load-session!)
+      (.then (fn [_]
+               (if (store/signed-in?)
+                 (-> (http/get! "/auth/me")
+                     (.then (fn [res]
+                              (store/set-session! (:user res)
+                                                  (:token @store/session))
+                              true))
+                     (.catchError (fn [_]
+                                    (store/clear-session!)
+                                    true)))
+                 (ok true))))))
 
-;; =============================================================================
-;; 1. Posts & References
-;; =============================================================================
+(defn register! [creds]
+  (-> (http/post! "/auth/register"
+                  {:username (:username creds)
+                   :password (:password creds)
+                   :display-name (:display-name creds)})
+      (.then (fn [res]
+               (store/set-session! (:user res) (:token res))
+               {:user (:user res) :token (:token res)}))))
 
-(defn ^:async fetch-posts
-  "Fetches a list of posts, supports pagination via query params."
-  [& {:keys [page limit] :or {page 1 limit 10}}]
-  (let [uri (Uri/parse (str base-url "/posts?page=" page "&limit=" limit))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn login! [creds]
+  (-> (http/post! "/auth/login"
+                  {:username (:username creds)
+                   :password (:password creds)})
+      (.then (fn [res]
+               (store/set-session! (:user res) (:token res))
+               {:user (:user res) :token (:token res)}))))
 
-(defn ^:async fetch-post
-  "Fetches detailed data for a single post."
-  [post-id]
-  (let [uri (Uri/parse (str base-url "/posts/" post-id))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn logout! []
+  (let [done (fn [_]
+               (store/clear-session!)
+               true)]
+    (if (store/signed-in?)
+      (-> (http/post! "/auth/logout")
+          (.then done)
+          (.catchError done))
+      (ok true))))
 
-(defn ^:async create-post
-  "Publishes a new post. Author identity is handled by Token on backend."
-  [payload]
-  (let [uri (Uri/parse (str base-url "/posts"))
-        api-payload {"title" (or (:title payload) (get payload "title"))
-                     "blocks" (or (:blocks payload) (get payload "blocks"))
-                     "tags" (or (:tags payload) (get payload "tags") [])}
-        body (convert/jsonEncode api-payload)
-        resp (await (http/post uri .headers (get-auth-headers) .body body))]
-    (parse-response resp)))
+(defn list-feed
+  ([] (list-feed nil))
+  ([opts]
+   (-> (http/get! "/contents" (or opts {}))
+       (.then data-page))))
 
-(defn ^:async update-post
-  "Updates an existing post. Requires Authorization Token."
-  [post-id payload]
-  (let [uri (Uri/parse (str base-url "/posts/" post-id))
-        api-payload {"title" (or (:title payload) (get payload "title"))
-                     "blocks" (or (:blocks payload) (get payload "blocks"))
-                     "tags" (or (:tags payload) (get payload "tags") [])}
-        body (convert/jsonEncode api-payload)
-        resp (await (http/put uri .headers (get-auth-headers) .body body))]
-    (parse-response resp)))
-    
-(defn ^:async delete-post
-  "Deletes an existing post. User must be the author of the post."
-  [post-id]
-  (let [uri (Uri/parse (str base-url "/posts/" post-id))
-        resp (await (http/delete uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn list-articles
+  ([] (list-articles nil))
+  ([opts]
+   (-> (http/get! "/contents"
+                  (merge {:type "article"} (or opts {})))
+       (.then data-page))))
 
-(defn ^:async fetch-outbound-references
-  "Retrieves all posts and blocks that the specified post quotes or references."
-  [post-id]
-  (let [uri (Uri/parse (str base-url "/posts/" post-id "/references/outbound"))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn list-questions
+  ([] (list-questions nil))
+  ([opts]
+   (-> (http/get! "/questions" (or opts {}))
+       (.then data-page))))
 
-(defn ^:async fetch-inbound-references
-  "Retrieves all posts and blocks that quote or reference the specified post (Backlinks)."
-  [post-id]
-  (let [uri (Uri/parse (str base-url "/posts/" post-id "/references/inbound"))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn unanswered
+  ([] (unanswered nil))
+  ([opts] (list-questions (assoc (or opts {}) :unanswered true))))
 
-;; =============================================================================
-;; 2. Comments
-;; =============================================================================
+(defn get-content [id-or-slug]
+  (-> (http/get! (str "/contents/" id-or-slug))
+      (.then data)))
 
-(defn ^:async fetch-comments
-  "Retrieves the comment tree for a specific post."
-  [post-id]
-  (let [uri (Uri/parse (str base-url "/posts/" post-id "/comments"))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn answers
+  ([qid] (answers qid nil))
+  ([qid opts]
+   (-> (http/get! (str "/questions/" qid "/answers") (or opts {}))
+       (.then data-page))))
 
+(defn comments [tt tid]
+  (-> (http/get! "/comments"
+                 {:target-type (if (keyword? tt) (name tt) (str tt))
+                  :target-id tid})
+      (.then (fn [res] (or (:data res) [])))))
 
-(defn ^:async create-comment
-  "Creates a new comment or reply. User ID extracted from Token by backend."
-  [payload]
-  (let [post-id (or (:post-id payload) (get payload "post_id"))
-        parent-id (or (:parent-id payload) (get payload "parent_id"))
-        
-        ;; 🌟 FIX 1: 恢复为你 Router 中真实存在的绝对路由
-        uri (Uri/parse (str base-url "/comments"))
-        
-        ;; 🌟 保持 FIX 2: 安全构造 Payload，只有 parent_id 存在时才传，避免后端 Ecto 崩溃
-        api-payload (cond-> {"post_id" post-id
-                             "content" (or (:content payload) (get payload "content"))}
-                      parent-id (assoc "parent_id" parent-id))
-                      
-        body (convert/jsonEncode api-payload)
-        resp (await (http/post uri .headers (get-auth-headers) .body body))]
-    (parse-response resp)))
+(defn search
+  ([q] (search q nil))
+  ([q {:keys [type*] :as opts}]
+   (if (str/blank? q)
+     (ok {:items [] :has-more false})
+     (-> (http/get! "/search"
+                    (cond-> (merge {:q q} (dissoc opts :type*))
+                      type* (assoc :type (name type*))))
+         (.then data-page)))))
 
-(defn ^:async delete-comment
-  "Deletes a comment. User must be the author of the comment."
-  [comment-id]
-  (let [uri (Uri/parse (str base-url "/comments/" comment-id))
-        resp (await (http/delete uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn tags
+  ([] (tags nil))
+  ([opts]
+   (-> (http/get! "/tags" (or opts {}))
+       ;; Tags are not content, so they skip normalize-content.
+       (.then (fn [res] (page-of (or (:data res) []) res))))))
 
-;; =============================================================================
-;; 3. Interactions
-;; =============================================================================
+(defn by-tag
+  ([slug] (by-tag slug nil))
+  ([slug opts]
+   (-> (http/get! (str "/tags/" slug) (or opts {}))
+       (.then data-page))))
 
-(defn ^:async toggle-like
-  "Toggles the like status for a post."
-  [post-id]
-  (let [uri (Uri/parse (str base-url "/posts/" post-id "/like"))
-        resp (await (http/post uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn profile [username]
+  (-> (http/get! (str "/users/" username))
+      (.then (fn [res]
+               {:user (:user res)
+                :articles (mapv normalize-content (or (:articles res) []))
+                :questions (mapv normalize-content (or (:questions res) []))
+                :answers (mapv normalize-content (or (:answers res) []))
+                :drafts (mapv normalize-content (or (:drafts res) []))}))))
 
-(defn ^:async toggle-bookmark
-  "Toggles the bookmark status for a post."
-  [post-id]
-  (let [uri (Uri/parse (str base-url "/posts/" post-id "/bookmark"))
-        resp (await (http/post uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn mine []
+  (-> (http/get! "/me/contents")
+      (.then data-list)))
 
-;; =============================================================================
-;; 4. User Profiles & Social
-;; =============================================================================
+(defn following-feed []
+  (-> (http/get! "/me/feed")
+      (.then data-list)))
 
-(defn ^:async fetch-user-posts
-  "Fetches posts published by a specific user."
-  [user-id]
-  (let [uri (Uri/parse (str base-url "/users/" user-id "/posts"))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn create-content!
+  [{:keys [type* title document tags question-id]}]
+  (let [body (cond-> {:type (name (or type* :article))
+                      :title (or title "")}
+               document (assoc :document (document->api document))
+               tags (assoc :tags tags)
+               question-id (assoc :question-id question-id))
+        path (if (and (= type* :answer) question-id)
+               (str "/questions/" question-id "/answers")
+               (if (= type* :question) "/questions" "/contents"))]
+    (-> (http/post! path body)
+        (.then data))))
 
-(defn ^:async fetch-user-bookmarks
-  "Fetches posts bookmarked by a specific user."
-  [user-id]
-  (let [uri (Uri/parse (str base-url "/users/" user-id "/bookmarks"))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn save-draft!
+  [id {:keys [title document tags]}]
+  (let [body (cond-> {}
+               (some? title) (assoc :title title)
+               (some? document) (assoc :document (document->api document))
+               (some? tags) (assoc :tags tags))]
+    (-> (http/patch! (str "/contents/" id) body)
+        (.then data))))
 
-;; =============================================================================
-;; 5. Media Uploads
-;; =============================================================================
+(defn publish! [id]
+  (-> (http/post! (str "/contents/" id "/publish"))
+      (.then data)))
 
-(defn ^:async upload-image
-  "Uploads an image file using multipart/form-data. Requires Token."
-  [^String file-path]
-  (let [uri (Uri/parse (str base-url "/uploads/images"))
-        req (http/MultipartRequest. "POST" uri)
-        file (await (http/MultipartFile.fromPath "file" file-path))
-        token (state/current-token)]
-    
-    (when (not (str/blank? token))
-      (.addAll (.-headers req) {"Authorization" (str "Bearer " token)}))
+(defn unpublish! [id]
+  (-> (http/post! (str "/contents/" id "/unpublish"))
+      (.then data)))
 
-    (.add (.-files req) file)
+(defn archive! [id]
+  (-> (http/post! (str "/contents/" id "/archive"))
+      (.then data)))
 
-    (let [resp-stream (await (.send req))
-          resp-str (await (.bytesToString resp-stream))
-          body (convert/jsonDecode resp-str)]
-      (if (= (.-statusCode resp-stream) 200)
-        (get-in body ["data" "url"] (get body "url"))
-        (throw (Exception. (str "Image upload failed: " resp-str)))))))
+(defn create-comment!
+  [{:keys [target-type target-id parent-id content content-spans]}]
+  (-> (http/post! "/comments"
+                  (cond-> {:target-type (if (keyword? target-type)
+                                          (name target-type)
+                                          (str target-type))
+                           :target-id target-id
+                           :content content
+                           :content-spans (or content-spans [])}
+                    parent-id (assoc :parent-id parent-id)))
+      (.then (fn [res] (:data res)))))
 
-;; =============================================================================
-;; 6. Topic Exploration
-;; =============================================================================
+(defn toggle-bookmark! [id]
+  (-> (http/post! (str "/contents/" id "/bookmark/toggle"))
+      (.then (fn [res] (boolean (:bookmarked res))))))
 
-(defn ^:async fetch-topic-posts
-  "Fetches posts tagged with a specific topic."
-  [tag & {:keys [page limit] :or {page 1 limit 10}}]
-  (let [encoded-tag (Uri/encodeComponent tag)
-        uri (Uri/parse (str base-url "/posts?tag=" encoded-tag "&page=" page "&limit=" limit))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn bookmarked? [c]
+  (boolean (or (:bookmarked c) false)))
 
-(defn ^:async search-posts
-  "Searches posts by a keyword query."
-  [q & {:keys [page limit] :or {page 1 limit 10}}]
-  (let [encoded-q (Uri/encodeComponent q)
-        uri (Uri/parse (str base-url "/search/posts?q=" encoded-q "&page=" page "&limit=" limit))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn bookmarks
+  ([] (bookmarks nil))
+  ([opts]
+   (-> (http/get! "/bookmarks" (or opts {}))
+       (.then data-page))))
 
-(defn ^:async search-blocks
-  "Searches blocks by a keyword query."
-  [q & {:keys [page limit] :or {page 1 limit 20}}]
-  (let [encoded-q (Uri/encodeComponent q)
-        uri (Uri/parse (str base-url "/search/blocks?q=" encoded-q "&page=" page "&limit=" limit))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn toggle-like! [id liked?]
+  (if liked?
+    (-> (http/delete! (str "/contents/" id "/like"))
+        (.then (fn [res] res)))
+    (-> (http/post! (str "/contents/" id "/like"))
+        (.then (fn [res] res)))))
 
-(defn ^:async fetch-hot-tags
-  "Fetches the list of trending tags from the server."
-  [& {:keys [limit] :or {limit 10}}]
-  (let [uri (Uri/parse (str base-url "/tags/hot?limit=" limit))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn vote! [answer-id value]
+  (-> (http/post! (str "/answers/" answer-id "/vote") {:value value})
+      (.then identity)))
 
-;; =============================================================================
-;; 7. PKM & Spaced Repetition System (Readwise Features)
-;; =============================================================================
+(defn unvote! [answer-id]
+  (-> (http/delete! (str "/answers/" answer-id "/vote"))
+      (.then identity)))
 
-(defn ^:async fetch-highlights
-  "Fetches highlights created by the user, supporting optional filters."
-  [& {:keys [source-type source-ref page limit] :or {page 1 limit 20}}]
-  (let [query-params (cond-> []
-                       source-type (conj (str "source_type=" (Uri/encodeComponent source-type)))
-                       source-ref  (conj (str "source_ref=" (Uri/encodeComponent source-ref)))
-                       true        (conj (str "page=" page))
-                       true        (conj (str "limit=" limit)))
-        query-str (str/join "&" query-params)
-        uri (Uri/parse (str base-url "/highlights?" query-str))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn follow! [user-id]
+  (-> (http/post! (str "/users/" user-id "/follow"))
+      (.then identity)))
 
-(defn ^:async fetch-highlight
-  "Fetches a single highlight by its UUID."
-  [highlight-id]
-  (let [uri (Uri/parse (str base-url "/highlights/" highlight-id))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn unfollow! [user-id]
+  (-> (http/delete! (str "/users/" user-id "/follow"))
+      (.then identity)))
 
-(defn ^:async create-highlight
-  "Creates a new highlight. If enqueue-srs is true, it automatically starts the review lifecycle."
-  [payload]
-  (let [uri (Uri/parse (str base-url "/highlights"))
-        api-payload {"content"      (or (:content payload) (get payload "content"))
-                     "source_type"  (or (:source-type payload) (get payload "source_type"))
-                     "source_ref"   (or (:source-ref payload) (get payload "source_ref"))
-                     "note"         (or (:note payload) (get payload "note"))
-                     "context_data" (or (:context-data payload) (get payload "context_data") {})
-                     "enqueue_srs"  (or (:enqueue-srs payload) (get payload "enqueue_srs") false)}
-        body (convert/jsonEncode api-payload)
-        resp (await (http/post uri .headers (get-auth-headers) .body body))]
-    (parse-response resp)))
+(defn notifications []
+  (-> (http/get! "/notifications")
+      (.then (fn [res]
+               {:items (or (:data res) [])
+                :unread-count (or (:unread-count res) 0)}))))
 
-(defn ^:async update-highlight
-  "Updates the static textual content of an existing highlight."
-  [highlight-id payload]
-  (let [uri (Uri/parse (str base-url "/highlights/" highlight-id))
-        api-payload {"content"      (or (:content payload) (get payload "content"))
-                     "note"         (or (:note payload) (get payload "note"))
-                     "source_ref"   (or (:source-ref payload) (get payload "source_ref"))
-                     "context_data" (or (:context-data payload) (get payload "context_data") {})}
-        body (convert/jsonEncode api-payload)
-        resp (await (http/put uri .headers (get-auth-headers) .body body))]
-    (parse-response resp)))
+(defn mark-notification-read! [id]
+  (-> (http/post! (str "/notifications/" id "/read"))
+      (.then (fn [res] (:data res)))))
 
-(defn ^:async delete-highlight
-  "Deletes a highlight. Cascades to delete associated SRS items and review logs."
-  [highlight-id]
-  (let [uri (Uri/parse (str base-url "/highlights/" highlight-id))
-        resp (await (http/delete uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn mark-all-notifications-read! []
+  (-> (http/post! "/notifications/read-all")
+      (.then identity)))
 
-(defn ^:async fetch-due-reviews
-  "Fetches the queue of SRS items that are due for review today.
-   Returns `{:data [...] :meta {:due_count N}}` so callers can read meta.due_count."
-  [& {:keys [limit include-new] :or {limit 50 include-new true}}]
-  (let [uri (Uri/parse (str base-url "/reviews/due?limit=" limit "&include_new=" include-new))
-        resp (await (http/get uri .headers (get-auth-headers)))
-        status (.-statusCode resp)
-        body-str (.-body resp)
-        json-data (try
-                    (if (str/blank? body-str) {} (convert/jsonDecode body-str))
-                    (catch Exception _ {}))]
-    (if (and (>= status 200) (< status 300))
-      {"data" (get json-data "data" [])
-       "meta" (get json-data "meta" {})}
-      (let [err-type (get json-data "error")
-            details (get json-data "details")
-            detail-str (when details
-                         (str/join "\n"
-                                   (for [k (.-keys details)]
-                                     (let [v (get details k)
-                                           err-val (if (coll? v) (first v) v)]
-                                       (str k ": " err-val)))))
-            error-msg (cond
-                        (not (str/blank? detail-str)) detail-str
-                        (not (str/blank? err-type)) err-type
-                        :else (str "API Error (" status ")"))]
-        (throw (Exception. error-msg))))))
-
-(defn ^:async enqueue-srs
-  "Manually pushes an existing highlight into the Spaced Repetition System."
-  [highlight-id]
-  (let [uri (Uri/parse (str base-url "/highlights/" highlight-id "/srs"))
-        resp (await (http/post uri .headers (get-auth-headers)))]
-    (parse-response resp)))
-
-(defn ^:async submit-review
-  "Submits SM-2 review feedback. Grade must be 1 (Again), 2 (Hard), 3 (Good), or 4 (Easy)."
-  [srs-item-id grade & {:keys [duration-ms]}]
-  (let [uri (Uri/parse (str base-url "/srs_items/" srs-item-id "/reviews"))
-        api-payload (cond-> {"grade" grade}
-                      duration-ms (assoc "duration_ms" duration-ms))
-        body (convert/jsonEncode api-payload)
-        resp (await (http/post uri .headers (get-auth-headers) .body body))]
-    (parse-response resp)))
-
-(defn ^:async update-srs-status
-  "Manually updates the SRS item status (e.g., suspending an item)."
-  [srs-item-id status]
-  (let [uri (Uri/parse (str base-url "/srs_items/" srs-item-id))
-        body (convert/jsonEncode {"status" status})
-        resp (await (http/patch uri .headers (get-auth-headers) .body body))]
-    (parse-response resp)))
-
-(defn ^:async fetch-review-logs
-  "Retrieves the immutable review history for a specific SRS item."
-  [srs-item-id & {:keys [page limit] :or {page 1 limit 50}}]
-  (let [uri (Uri/parse (str base-url "/srs_items/" srs-item-id "/review_logs?page=" page "&limit=" limit))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
-
-;; =============================================================================
-;; 8. User Relationships (Follows)
-;; =============================================================================
-
-(defn ^:async follow-user
-  "Follows another user by their ID."
-  [user-id]
-  (let [uri (Uri/parse (str base-url "/users/" user-id "/follow"))
-        resp (await (http/post uri .headers (get-auth-headers)))]
-    (parse-response resp)))
-
-(defn ^:async unfollow-user
-  "Unfollows a user."
-  [user-id]
-  (let [uri (Uri/parse (str base-url "/users/" user-id "/follow"))
-        resp (await (http/delete uri .headers (get-auth-headers)))]
-    (parse-response resp)))
-
-(defn ^:async fetch-followers
-  "Fetches the list of users following the specified user."
-  [user-id & {:keys [page limit] :or {page 1 limit 20}}]
-  (let [uri (Uri/parse (str base-url "/users/" user-id "/followers?page=" page "&limit=" limit))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
-
-(defn ^:async fetch-following
-  "Fetches the list of users that the specified user is currently following."
-  [user-id & {:keys [page limit] :or {page 1 limit 20}}]
-  (let [uri (Uri/parse (str base-url "/users/" user-id "/following?page=" page "&limit=" limit))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
-
-(defn ^:async fetch-follow-stats
-  "Retrieves follower and following counts for a user."
-  [user-id]
-  (let [uri (Uri/parse (str base-url "/users/" user-id "/follow-stats"))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
-
-(defn ^:async fetch-relationship
-  "Checks the current logged-in user's relationship to the target user (e.g., is_following)."
-  [user-id]
-  (let [uri (Uri/parse (str base-url "/users/" user-id "/relationship"))
-        resp (await (http/get uri .headers (get-auth-headers)))]
-    (parse-response resp)))
+(defn upload-asset! [file-path]
+  (-> (http/upload! file-path)
+      (.then (fn [res] (:data res)))))

@@ -1,0 +1,45 @@
+(ns nomio.content.reader
+  "NomioContentReader — render a published MGL Document, not HTML."
+  (:require ["package:flutter/material.dart" :as m]
+            [block-editor.widgets.reader :as reader]
+            [block-editor.config :as be-config]
+            [nomio.content.editor :as neditor]
+            [nomio.theme :as theme]
+            [nomio.widgets.mongol :as mg]))
+
+(defn- block-column [block plugins cfg on-link !state]
+  (m/Container
+   .width 280.0
+   .margin (m.EdgeInsets/only .right 12.0)
+   .child (reader/block-reader-view block plugins cfg on-link !state)))
+
+(defn- walk-row [ids blocks plugins cfg on-link !state]
+  (m/Row
+   .crossAxisAlignment m.CrossAxisAlignment/stretch
+   .children
+   (mapv (fn [id]
+           (let [block (get blocks id)
+                 kids (:children block [])]
+             (m/Row
+              .crossAxisAlignment m.CrossAxisAlignment/stretch
+              .children
+              (cond-> [(block-column block plugins cfg on-link !state)]
+                (seq kids)
+                (conj (walk-row kids blocks plugins cfg on-link !state))))))
+         ids)))
+
+(defn widget
+  "Horizontal Mongolian reader for an MGL Document map."
+  [document & {:keys [on-link]}]
+  (let [state (or document {:root [] :blocks {}})
+        !state (atom state)
+        cfg (be-config/build-config (neditor/editor-config on-link))
+        plugins (:block-plugins cfg [])
+        ids (:root state [])]
+    (if (empty? ids)
+      (m/Center .child (mg/muted "…"))
+      (m/ListView
+       .scrollDirection m.Axis/horizontal
+       .padding (m.EdgeInsets/all 16.0)
+       .children
+       [(walk-row ids (:blocks state {}) plugins cfg on-link !state)]))))

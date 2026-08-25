@@ -1,0 +1,34 @@
+(ns nomio.widgets.bottom-nav
+  (:require ["package:flutter/material.dart" :as m]
+            ["package:flutter/services.dart" :as s]
+            [cljd.flutter :as f]
+            [nomio.state.store :as store]
+            [nomio.widgets.side-nav :as side]))
+
+(def ^:private nearest-tab
+  "Desktop has more destinations than the bottom bar. NavigationBar cannot show
+   'nothing selected', so routes without their own tab highlight a relative."
+  {"articles" "explore"
+   "questions" "explore"
+   "search" "explore"
+   "bookmarks" "profile"})
+
+(defn bar []
+  (f/widget
+   :watch [nav-id (f/sub store/app-ui :selected-nav-id)]
+   (let [tabs side/mobile-tabs
+         wanted (get nearest-tab nav-id nav-id)
+         idx (or (first (keep-indexed (fn [i t] (when (= (:id t) wanted) i)) tabs)) 0)]
+     (m/NavigationBar
+      .selectedIndex (int idx)
+      .onDestinationSelected
+      (fn [i]
+        (s/HapticFeedback.mediumImpact)
+        (store/set-nav! (:id (nth tabs (int i)))))
+      .destinations
+      (mapv (fn [{:keys [icon selected-icon label]}]
+              (m/NavigationDestination
+               .icon (m/Icon icon)
+               .selectedIcon (m/Icon selected-icon)
+               .label label))
+            tabs)))))

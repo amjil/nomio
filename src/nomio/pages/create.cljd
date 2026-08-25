@@ -1,0 +1,53 @@
+(ns nomio.pages.create
+  (:require ["package:flutter/material.dart" :as m]
+            [cljd.flutter :as f]
+            [nomio.core.api :as api]
+            [nomio.state.store :as store]
+            [nomio.theme :as theme]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.toast :as toast]))
+
+(defn- start! [ctx type*]
+  (store/require-auth!
+   (fn []
+     (-> (api/create-content! {:type* type* :title ""})
+         (.then (fn [c]
+                  (when (.-mounted ^m/BuildContext ctx)
+                    (store/push-named! (str "/content/" (:id c) "/edit")))
+                  nil))
+         (.catchError (fn [e]
+                        (when (.-mounted ^m/BuildContext ctx)
+                          (toast/error! ctx e))
+                        nil)))))
+  nil)
+
+(defn- tile [ctx icon label type*]
+  (m/InkWell
+   .onTap #(start! ctx type*)
+   .child
+   (m/Container
+    .margin (m.EdgeInsets/all 16.0)
+    .padding (m.EdgeInsets/all 24.0)
+    .decoration (m/BoxDecoration
+                 .color theme/surface
+                 .borderRadius (m.BorderRadius/circular 16.0)
+                 .border (m/Border.all .color theme/divider))
+    .child
+    (m/Column
+     .mainAxisAlignment m.MainAxisAlignment/center
+     .mainAxisSize m.MainAxisSize/min
+     .children
+     [(m/Icon icon .size 36.0 .color theme/accent)
+      (m/SizedBox .height 16.0)
+      (mg/text label {:size 18.0})]))))
+
+(defn page []
+  (f/widget
+   :context ctx
+   (m/Center
+    .child
+    (m/Row
+     .mainAxisAlignment m.MainAxisAlignment/center
+     .children
+     [(tile ctx m.Icons/article_outlined "Article" :article)
+      (tile ctx m.Icons/help_outline "Question" :question)]))))

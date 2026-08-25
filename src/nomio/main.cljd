@@ -1,64 +1,49 @@
 (ns nomio.main
-  "App global entry point: Responsible for resource warmup, permission validation, and mounting the root view.
-   Configured with the Tenger Blue design system."
-  (:require
-   ["package:flutter/material.dart" :as m]
-   ["package:flutter/foundation.dart" :as foundation :refer [kIsWeb]]
-   [cljd.flutter :as f]
+  (:require ["package:flutter/material.dart" :as m]
+            ["package:flutter_styled_toast/flutter_styled_toast.dart" :as st]
+            [cljd.flutter :as f]
+            [nomio.platform :as platform]
+            [nomio.bootstrap.desktop :as desktop-boot]
+            [nomio.bootstrap.mobile :as mobile-boot]
+            [nomio.core.api :as api]
+            [nomio.core.router :as router]
+            [nomio.state.store :as store]
+            [nomio.theme :as theme]
+            [nomio.widgets.toast :as toast]))
 
-   ;; Nomio Core Architecture
-   [nomio.core.router :as router]
-   [nomio.core.state :as state]
-   [nomio.utils.tokens :as tokens]
+(defn main []
+  (m/WidgetsFlutterBinding.ensureInitialized)
 
-   ;; Cross-platform IME Engine Dictionary Libraries
-   [virtual-keyboard.input-control :as input-control]
-   [ime-core.remote-api :as remote]
-   [ime-core.fst-engine :as fst]
-   [ime-core.next-word :as next-word]))
+  (try
+    (if (platform/desktop?)
+      (await (desktop-boot/init!))
+      (await (mobile-boot/init!)))
+    (catch Exception e
+      (dart:core/print (str "bootstrap failed: " e))))
 
-;; =============================================================================
-;; Helper Functions
-;; =============================================================================
-
-(defn is-mobile? []
-  (let [platform foundation/defaultTargetPlatform]
-    (or (= platform foundation.TargetPlatform/android)
-        (= platform foundation.TargetPlatform/iOS))))
-
-;; =============================================================================
-;; App Entry Point
-;; =============================================================================
-
-(defn ^:async main []
-  (m.WidgetsFlutterBinding/ensureInitialized)
-
-  (await (state/init-local-state!))
-
-  (remote/set-config! {:base-url "localhost:3003"
-                       :candidate-api-path "/api/next_word/candidates"
-                       :next-word-api-path "/api/next_word/list"})
-
-  (when-not kIsWeb
-    (await (fst/ensure-loaded))
-    (await (next-word/ensure-loaded)))
-
-  (when (is-mobile?)
-    (input-control/set-control))
+  (try
+    (await (api/init!))
+    (catch Exception e
+      (dart:core/print (str "session init failed: " e))))
 
   (f/run
-   (f/widget
-    :watch [app-state state/!app-state]
-
-    (m/MaterialApp
-     .title "Nomio"
-     .debugShowCheckedModeBanner false
-
-     .theme tokens/tenger-theme
-     .themeMode m.ThemeMode/dark
-
-     ;; Routing Dispatch Center: Delegate all navigation rules to router.cljd
-     .initialRoute "/"
-     .onGenerateRoute
-     (fn [^m/RouteSettings settings]
-       (router/generate-route settings))))))
+   (m/MaterialApp
+    .navigatorKey store/nav-key
+    .title "Nomio"
+    .debugShowCheckedModeBanner false
+    .theme (theme/app-theme)
+    .darkTheme (theme/app-theme)
+    .themeMode m.ThemeMode/dark
+    .builder
+    (fn [_ctx child]
+      (st/StyledToast
+       .child
+       (f/widget
+        :context host-ctx
+        (do
+          (toast/remember-root-ctx! host-ctx)
+          (or child (m/SizedBox.shrink))))))
+    .initialRoute "/"
+    .onGenerateRoute
+    (fn [^m/RouteSettings settings]
+      (router/generate-route settings)))))

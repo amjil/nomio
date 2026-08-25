@@ -1,0 +1,30 @@
+(ns nomio.pages.shell
+  (:require [nomio.platform :as platform]
+            [nomio.pages.desktop.shell :as desktop]
+            [nomio.pages.mobile.shell :as mobile]
+            [nomio.pages.home :as home]
+            [nomio.pages.explore :as explore]
+            [nomio.pages.articles :as articles]
+            [nomio.pages.questions :as questions]
+            [nomio.pages.search :as search]
+            [nomio.pages.create :as create]
+            [nomio.pages.bookmarks :as bookmarks]
+            [nomio.pages.notifications :as notifications]
+            [nomio.pages.profile :as profile]))
+
+(defn body-for [nav-id]
+  (case nav-id
+    "explore" (explore/page)
+    "articles" (articles/page)
+    "questions" (questions/page)
+    "search" (search/page)
+    "create" (create/page)
+    "bookmarks" (bookmarks/page)
+    "notifications" (notifications/page)
+    "profile" (profile/page)
+    (home/page)))
+
+(defn app-shell []
+  (if (platform/desktop?)
+    (desktop/desktop-shell body-for)
+    (mobile/mobile-shell body-for)))

@@ -1,0 +1,50 @@
+(ns nomio.widgets.keyboard
+  "In-app Mongolian virtual keyboard (mobile) and shared IME overlay (desktop)."
+  (:require ["package:flutter/material.dart" :as m]
+            [cljd.flutter :as f]
+            [nomio.platform :as platform]
+            [virtual-keyboard.input-control :as input-control]
+            [virtual-keyboard.keyboard :as vk]
+            [virtual-keyboard.options :as vk-options]
+            [shared-ime.overlay-view :as overlay]))
+
+(def info
+  (merge vk-options/keyboard-option
+         {:keyboard/mongol-font-family "OyunQaganTig"
+          :keyboard/key-container-color m/Colors.grey.shade500
+          :keyboard/font-size 16}))
+
+(defn install []
+  (input-control/set-control)
+  true)
+
+(defn restore-ime! [_]
+  (input-control/restore-control)
+  nil)
+
+(defn candidates []
+  (vk/candidates nil))
+
+(defn bar []
+  (m/Container
+   .decoration (m/BoxDecoration
+                .border (m/Border .top (m/BorderSide .color (m/Color 0x22FFFFFF) .width 0.5)))
+   .child (vk/keyboard {})))
+
+(defn wrap
+  "Wrap page body with mobile VK or desktop IME overlay."
+  [main-content]
+  (if (platform/mobile?)
+    (f/widget
+     :let [kb-info info]
+     :bind {:info kb-info}
+     (m/Column
+      .children
+      [(m/Expanded
+        .child
+        (m/Stack
+         .children
+         [main-content
+          (candidates)]))
+       (bar)]))
+    (overlay/ime-global-wrapper main-content)))

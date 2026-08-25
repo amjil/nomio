@@ -1,0 +1,22 @@
+(ns nomio.pages.mobile.shell
+  (:require ["package:flutter/material.dart" :as m]
+            [cljd.flutter :as f]
+            [nomio.state.store :as store]
+            [nomio.theme :as theme]
+            [nomio.widgets.bottom-nav :as nav]))
+
+(defn mobile-shell [body-for]
+  (f/widget
+   :watch [nav-id (f/sub store/app-ui :selected-nav-id)]
+   (m/Scaffold
+    .backgroundColor theme/bg
+    .body
+    (m/SafeArea
+     .child
+     (m/AnimatedSwitcher
+      .duration (dart:core/Duration. .milliseconds 200)
+      .child
+      (m/KeyedSubtree
+       .key (m/ValueKey nav-id)
+       .child (body-for nav-id))))
+    .bottomNavigationBar (nav/bar))))

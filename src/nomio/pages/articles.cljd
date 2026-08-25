@@ -1,0 +1,7 @@
+(ns nomio.pages.articles
+  (:require [nomio.core.api :as api]
+            [nomio.widgets.content-card :as cards]
+            [nomio.widgets.paged :as paged]))
+
+(defn page []
+  (paged/list-page "Articles" api/list-articles cards/card))

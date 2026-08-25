@@ -1,0 +1,77 @@
+(ns nomio.content.document
+  "MGL Document helpers: persist via mgl-block-editor, extract text/tags/links."
+  (:require ["dart:convert" :as convert]
+            [clojure.string :as str]
+            [block-editor.utils.persistence :as persist]))
+
+(def runtime-keys #{:active-block-id :selected-block-ids :cursor-visible
+                    :history :editor-config :external-keyboard-delegate
+                    :scroll-to-block-id :global-selection})
+
+(defn empty-document []
+  (persist/create-empty-state))
+
+(defn export-json
+  "Canonical persisted MGL Document JSON. Strips editor runtime state."
+  [state]
+  (persist/export-to-json state))
+
+(defn import-json [json]
+  (if (and json (seq (str json)))
+    (persist/import-from-json (str json))
+    (empty-document)))
+
+(defn- walk-blocks [state]
+  (let [blocks (:blocks state {})
+        root (:root state [])
+        out (atom [])]
+    (letfn [(walk [ids]
+              (doseq [id ids]
+                (when-let [b (get blocks id)]
+                  (swap! out conj b)
+                  (when (seq (:children b))
+                    (walk (:children b))))))]
+      (walk root)
+      @out)))
+
+(defn plain-text
+  "Search / excerpt source. HTML is never the search source."
+  [state]
+  (->> (walk-blocks state)
+       (keep (fn [b]
+               (when (and (not= (:type b) :image)
+                          (not= (:type b) :divider)
+                          (seq (or (:content b) "")))
+                 (:content b))))
+       (str/join "\n")))
+
+(defn excerpt
+  ([state] (excerpt state 80))
+  ([state n]
+   (let [t (str/trim (plain-text state))]
+     (if (<= (count t) n)
+       t
+       (str (subs t 0 n) "…")))))
+
+(defn extract-tags [state]
+  (let [text (plain-text state)]
+    (->> (re-seq #"#([^\s#\[\]\.\,\!\?]+)" (or text ""))
+         (map second)
+         (remove str/blank?)
+         distinct
+         vec)))
+
+(defn extract-wikilinks [state]
+  (let [text (plain-text state)]
+    (->> (re-seq #"\[\[([^\]]+)\]\]" (or text ""))
+         (map second)
+         (remove str/blank?)
+         distinct
+         vec)))
+
+(defn merge-tags [explicit state]
+  (->> (concat (or explicit []) (extract-tags state))
+       (map str/trim)
+       (remove str/blank?)
+       distinct
+       vec))

@@ -1,0 +1,62 @@
+(ns nomio.pages.explore
+  (:require ["package:flutter/material.dart" :as m]
+            [cljd.flutter :as f]
+            [nomio.core.api :as api]
+            [nomio.state.store :as store]
+            [nomio.theme :as theme]
+            [nomio.widgets.content-card :as cards]
+            [nomio.widgets.filter-bar :as filter-bar]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.paged :as paged]))
+
+(def ^:private default-tab "articles")
+
+(def ^:private tabs
+  [["articles" "Articles"]
+   ["questions" "Questions"]
+   ["tags" "Tags"]])
+
+(defn- tag-card [t]
+  (m/InkWell
+   .onTap #(store/push-named! (str "/tags/" (:slug t)))
+   .child
+   (m/Container
+    .width 120.0
+    .margin (m.EdgeInsets/all 8.0)
+    .padding (m.EdgeInsets/all 16.0)
+    .decoration (m/BoxDecoration
+                 .color theme/surface
+                 .borderRadius (m.BorderRadius/circular 12.0))
+    .child (mg/text (str "#" (:name t) " " (:count t))))))
+
+(defn- fetch-for [tab]
+  (case tab
+    "questions" api/list-questions
+    "tags" api/tags
+    api/list-articles))
+
+(defn page []
+  (f/widget
+   :context ctx
+   :let [initial (or (:explore-tab @store/app-ui) default-tab)
+         !tab (atom initial)
+         !st (paged/state)
+         ;; Indirect through the atom so the strip's scroll listener keeps
+         ;; paging the tab that is actually on screen.
+         fetch (fn [opts] ((fetch-for @!tab) opts))
+         show! (fn [tab]
+                 (swap! store/app-ui assoc :explore-tab tab)
+                 (reset! !tab tab)
+                 (paged/reload! ctx !st fetch)
+                 nil)
+         _ (show! initial)]
+   :watch [tab !tab]
+   (m/Row
+    .crossAxisAlignment m.CrossAxisAlignment/start
+    .children
+    [(m/Padding
+      .padding (m.EdgeInsets/all 12.0)
+      .child (filter-bar/single-select tabs initial show!))
+     (m/Expanded
+      .key (m/ValueKey tab)
+      .child (paged/strip !st fetch (if (= tab "tags") tag-card cards/card)))])))

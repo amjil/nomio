@@ -1,0 +1,11 @@
+(ns nomio.pages.bookmarks
+  (:require [nomio.core.api :as api]
+            [nomio.state.store :as store]
+            [nomio.widgets.content-card :as cards]
+            [nomio.widgets.paged :as paged]
+            [nomio.widgets.sign-in :as sign-in]))
+
+(defn page []
+  (if-not (store/signed-in?)
+    (sign-in/prompt "Sign in to see your bookmarks")
+    (paged/list-page "Bookmarks" api/bookmarks cards/card)))

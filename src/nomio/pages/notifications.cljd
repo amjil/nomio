@@ -1,0 +1,106 @@
+(ns nomio.pages.notifications
+  (:require ["package:flutter/material.dart" :as m]
+            ["package:mongol/mongol.dart" :as mgl]
+            [cljd.flutter :as f]
+            [nomio.core.api :as api]
+            [nomio.state.store :as store]
+            [nomio.theme :as theme]
+            [nomio.widgets.async :as asy]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.sign-in :as sign-in]
+            [nomio.widgets.toast :as toast]))
+
+(defn- open-note!
+  "Marking read is best-effort — the reader is already on their way to the
+   target, so a failure here is not worth interrupting them with. It still has
+   to be caught, or the rejected future surfaces as an unhandled error."
+  [n on-read]
+  (when-let [href (:href n)]
+    (store/push-named! href))
+  (when (and (:id n) (nil? (:read-at n)))
+    (-> (api/mark-notification-read! (:id n))
+        (.then (fn [updated] (when updated (on-read updated)) nil))
+        (.catchError (fn [_] nil))))
+  nil)
+
+(defn- note-card [on-read n]
+  (m/InkWell
+   .onTap #(open-note! n on-read)
+   .child
+   (m/Container
+    .width 220.0
+    .margin (m.EdgeInsets/symmetric .horizontal 8.0 .vertical 12.0)
+    .padding (m.EdgeInsets/all 16.0)
+    .decoration (m/BoxDecoration
+                 .color (if (:read-at n) theme/surface theme/bg)
+                 .borderRadius (m.BorderRadius/circular 12.0)
+                 .border (m/Border.all .color theme/divider))
+    .child
+    (m/Column
+     .crossAxisAlignment m.CrossAxisAlignment/start
+     .children
+     [(mg/text (or (:title n) (:type n) "") {:size 15.0 :weight m.FontWeight/w600})
+      (m/SizedBox .height 8.0)
+      (m/Expanded .child (mg/muted (or (:excerpt n) "")))
+      (mg/muted (or (get-in n [:actor :display-name])
+                    (get-in n [:actor :username])
+                    ""))]))))
+
+(defn- note-list [on-read items]
+  (if (empty? items)
+    (asy/empty-state "No notifications")
+    (m/ListView
+     .scrollDirection m.Axis/horizontal
+     .padding (m.EdgeInsets/symmetric .horizontal 8.0)
+     .children (mapv #(note-card on-read %) items))))
+
+(defn- aside [ctx data reload!]
+  (m/Column
+   .mainAxisSize m.MainAxisSize/min
+   .children
+   [(mg/text (str "Notifications"
+                  (when (pos? (or (:unread-count data) 0))
+                    (str " (" (:unread-count data) ")")))
+             {:size 16.0})
+    (m/SizedBox .height 12.0)
+    (mgl/MongolTextButton
+     .onPressed
+     (fn []
+       (-> (api/mark-all-notifications-read!)
+           (.then (fn [_]
+                    (when (.-mounted ^m/BuildContext ctx)
+                      (reload!)
+                      (toast/success! ctx "Marked as read"))
+                    nil))
+           (.catchError (fn [e]
+                          (when (.-mounted ^m/BuildContext ctx)
+                            (toast/error! ctx e))
+                          nil))))
+     .child (mg/muted "read all"))]))
+
+(defn- swap-note
+  "Drops the server's updated copy in place rather than refetching the list, so
+   the card the reader just tapped dims without the strip flickering."
+  [data updated]
+  (-> data
+      (update :items (fn [items]
+                       (mapv #(if (= (:id %) (:id updated)) updated %) items)))
+      (update :unread-count #(max 0 (dec (or % 0))))))
+
+(defn- signed-in-page []
+  (f/widget
+   :context ctx
+   :let [!st (atom {:status :loading})
+         reload! (fn [] (asy/load! ctx !st (api/notifications)) nil)
+         on-read (fn [updated] (swap! !st update :data swap-note updated) nil)
+         _ (reload!)]
+   :watch [st !st]
+   (asy/section (aside ctx (:data st) reload!)
+                !st
+                (fn [data] (note-list on-read (:items data)))
+                :retry reload!)))
+
+(defn page []
+  (if-not (store/signed-in?)
+    (sign-in/prompt "Sign in to see notifications")
+    (signed-in-page)))

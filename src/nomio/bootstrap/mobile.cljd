@@ -1,0 +1,12 @@
+(ns nomio.bootstrap.mobile
+  "Mobile startup: FST / next-word. InputControl is installed per writing screen."
+  (:require ["package:flutter/foundation.dart" :as foundation :refer [kIsWeb]]
+            [ime-core.fst-engine :as fst]
+            [ime-core.next-word :as next-word]))
+
+(defn init!
+  []
+  (when-not kIsWeb
+    (await (fst/ensure-loaded))
+    (await (next-word/ensure-loaded)))
+  (dart:core/print "nomio.bootstrap.mobile: ready"))

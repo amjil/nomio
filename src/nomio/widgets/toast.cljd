@@ -1,0 +1,37 @@
+(ns nomio.widgets.toast
+  (:require ["package:flutter/material.dart" :as m]
+            [components.toast :as toast]
+            [nomio.core.errors :as errors]))
+
+(defonce ^:private !root-ctx (atom nil))
+
+(defn remember-root-ctx! [ctx]
+  (when ctx (reset! !root-ctx ctx))
+  nil)
+
+(defn- mounted? [ctx]
+  (boolean
+   (when ctx
+     (try
+       (.-mounted ^m/BuildContext ctx)
+       (catch Object _ false)))))
+
+(defn safe-ctx [ctx]
+  (or (when (mounted? @!root-ctx) @!root-ctx)
+      (when (mounted? ctx) ctx)))
+
+(defn- show! [show-fn ctx msg]
+  (when-let [c (safe-ctx ctx)]
+    (try
+      (show-fn c (str msg))
+      (catch Object e
+        (dart:core/print (str "toast failed: " e " / " msg)))))
+  nil)
+
+(defn success! [ctx msg] (show! toast/success ctx msg))
+(defn info! [ctx msg] (show! toast/info ctx msg))
+
+(defn error!
+  "Takes a raw error or a string; readers never see Dart's \"Exception: ...\"."
+  [ctx e]
+  (show! toast/error ctx (errors/message e)))

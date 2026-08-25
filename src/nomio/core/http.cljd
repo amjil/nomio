@@ -1,0 +1,157 @@
+(ns nomio.core.http
+  "Low-level HTTP client for Nomio Phoenix API."
+  (:require ["package:http/http.dart" :as http]
+            ["dart:convert" :as convert]
+            [clojure.string :as str]
+            [nomio.core.errors :as errors]
+            [nomio.state.store :as store]))
+
+(def base-url
+  "Override for real deployments:
+     flutter run --dart-define=NOMIO_API_BASE_URL=https://…/api/v1"
+  (dart:core/String.fromEnvironment
+   "NOMIO_API_BASE_URL"
+   .defaultValue "http://127.0.0.1:4000/api/v1"))
+
+(def ^:private request-timeout (dart:core/Duration. .seconds 20))
+
+(defn- kebab<-snake [^String s]
+  (str/replace s "_" "-"))
+
+(defn- snake<-kebab [^String s]
+  (str/replace s "-" "_"))
+
+(defn- encode-key [k]
+  (cond
+    (= k :type*) "type"
+    (keyword? k) (snake<-kebab (name k))
+    :else (str k)))
+
+(defn encode
+  "Clojure data → JSON-encodable Dart structure (string keys, snake_case).
+   Pure Dart Maps (e.g. MGL documents from jsonDecode) pass through unchanged.
+   Clojure maps must be handled before dart:core/Map — PersistentHashMap
+   implements Map, so an early dart/is? would skip keyword→string conversion."
+  [x]
+  (cond
+    (nil? x) nil
+    (keyword? x) (name x)
+    (map? x) (reduce-kv (fn [acc k v]
+                          (assoc acc (encode-key k) (encode v)))
+                        {} x)
+    (set? x) (mapv encode x)
+    (sequential? x) (mapv encode x)
+    (dart/is? x dart:core/Map) x
+    (dart/is? x dart:core/Iterable) (mapv encode x)
+    :else x))
+
+(defn decode
+  "JSON-decoded Dart value → Clojure (keyword keys, kebab-case)."
+  [x]
+  (letfn [(walk [v]
+            (cond
+              (dart/is? v dart:core/Map)
+              (reduce (fn [acc ^String k]
+                        (assoc acc (keyword (kebab<-snake k)) (walk (get v k))))
+                      {}
+                      (.-keys v))
+              (dart/is? v dart:core/Iterable)
+              (mapv walk v)
+              :else v))]
+    (walk x)))
+
+(defn- headers []
+  (let [h {"Content-Type" "application/json"
+           "Accept" "application/json"}
+        token (:token @store/session)]
+    (if (seq token)
+      (assoc h "Authorization" (str "Bearer " token))
+      h)))
+
+(defn- auth-headers []
+  (when-let [token (:token @store/session)]
+    {"Authorization" (str "Bearer " token)}))
+
+(defn- build-uri
+  ([path] (build-uri path nil))
+  ([path query]
+   (let [u (dart:core/Uri.parse (str base-url path))]
+     (if (seq query)
+       (.replace u .queryParameters
+                 (reduce-kv (fn [acc k v]
+                              (assoc acc (encode-key k) (str v)))
+                            {} query))
+       u))))
+
+(defn- error-message [decoded status]
+  (or (when (map? decoded) (or (:error decoded) (:message decoded)))
+      (str "HTTP " status)))
+
+(defn- handle [^http/Response response]
+  (let [status (.-statusCode response)
+        body (.-body response)
+        decoded (when (seq body)
+                  (try (decode (convert/jsonDecode body))
+                       (catch Exception _ nil)))]
+    (cond
+      (and (>= status 200) (< status 300))
+      (or decoded {})
+
+      (= status 401)
+      (do
+        (store/clear-session!)
+        (throw (Exception. "unauthorized")))
+
+      :else
+      (throw (Exception. (error-message decoded status))))))
+
+(defn- send!
+  "Bounds the request, decodes it, and reports an unreachable server as
+   `offline` rather than leaking the http package's exception text."
+  [response-future]
+  (-> response-future
+      (.timeout request-timeout
+                .onTimeout (fn [] (throw (Exception. errors/timeout))))
+      (.then handle)
+      (.catchError (fn [_] (throw (Exception. errors/offline)))
+                   .test (fn [e] (dart/is? e http/ClientException)))))
+
+(defn get!
+  ([path] (get! path nil))
+  ([path query]
+   (send! (http/get (build-uri path query) .headers (headers)))))
+
+(defn post!
+  ([path] (post! path nil))
+  ([path body]
+   (send! (http/post (build-uri path)
+                     .headers (headers)
+                     .body (if (nil? body) "{}" (convert/jsonEncode (encode body)))))))
+
+(defn patch!
+  [path body]
+  (send! (http/patch (build-uri path)
+                     .headers (headers)
+                     .body (convert/jsonEncode (encode body)))))
+
+(defn delete!
+  ([path] (delete! path nil))
+  ([path body]
+   (if body
+     (send! (http/delete (build-uri path)
+                         .headers (headers)
+                         .body (convert/jsonEncode (encode body))))
+     (send! (http/delete (build-uri path) .headers (headers))))))
+
+(defn upload!
+  "Multipart file upload to POST /assets. Returns decoded asset map."
+  [file-path]
+  (let [uri (build-uri "/assets")
+        request (http/MultipartRequest. "POST" uri)]
+    (when-let [h (auth-headers)]
+      (.addAll (.-headers request) h))
+    (-> (http/MultipartFile.fromPath "file" file-path)
+        (.then (fn [^http/MultipartFile part]
+                 (.add (.-files request) part)
+                 (send! (-> (.send request)
+                            (.then http/Response.fromStream))))))))

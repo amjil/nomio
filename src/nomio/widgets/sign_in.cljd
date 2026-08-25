@@ -1,0 +1,20 @@
+(ns nomio.widgets.sign-in
+  "Placeholder shown in tabs that need an account."
+  (:require ["package:flutter/material.dart" :as m]
+            ["package:mongol/mongol.dart" :as mgl]
+            [nomio.state.store :as store]
+            [nomio.widgets.mongol :as mg]))
+
+(defn prompt
+  ([] (prompt "Sign in to continue"))
+  ([label]
+   (m/Center
+    .child
+    (m/Row
+     .mainAxisSize m.MainAxisSize/min
+     .children
+     [(mg/muted label)
+      (m/SizedBox .width 12.0)
+      (mgl/MongolTextButton
+       .onPressed #(store/push-named! "/login")
+       .child (mg/text "Login"))]))))
