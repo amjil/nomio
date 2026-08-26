@@ -3,16 +3,16 @@
    Autosave / revision / publish live in the write page, not here."
   (:require ["package:flutter/material.dart" :as m]
             [block-editor.widgets.editor :as editor]
-            [block-editor.widgets.toolbar :as toolbar]
-            [block-editor.plugins.image :as image]
             [clojure.string :as str]
+            [nomio.content.image :as nimage]
             [nomio.state.store :as store]
-            [nomio.theme :as theme]))
+            [nomio.theme :as theme]
+            [nomio.widgets.editor-toolbar :as etb]))
 
 (defn editor-config
   ([] (editor-config nil))
   ([on-link]
-   {:block-plugins [(image/image-plugin)]
+   {:block-plugins [(nimage/image-plugin)]
     :text-block-types #{:paragraph :heading-1 :heading-2 :heading-3
                         :blockquote :list-item :ordered-list-item :task :callout :toggle}
     :on-link-tap (or on-link (fn [_]))
@@ -40,7 +40,7 @@
     (editor/mongol-block-editor
      !state
      :editor-config cfg
-     :toolbar (when toolbar? (toolbar/editor-toolbar !state cfg))
+     :toolbar (when toolbar? (etb/editor-toolbar !state cfg))
      :background-color theme/bg
      :show-block-handles? show-handles?
      :wrap-ime? wrap-ime?

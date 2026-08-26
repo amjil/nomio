@@ -1,0 +1,110 @@
+(ns nomio.widgets.editor-toolbar
+  "Block toolbar. Image insert picks a file and uploads it as a Nomio asset
+   instead of pasting the block-editor picsum placeholder."
+  (:require ["package:flutter/material.dart" :as m]
+            [cljd.flutter :as f]
+            [clojure.string :as str]
+            [block-editor.commands.link :as link]
+            [block-editor.commands.ops :as ops]
+            [nomio.content.image :as nimage]
+            [nomio.theme :as theme]
+            [rich-editor.commands.transaction :as tx]))
+
+(defn- toolbar-button [icon tooltip is-active? on-tap]
+  (m/IconButton
+   .icon (m/Icon icon)
+   .tooltip tooltip
+   .color (if is-active? theme/accent theme/ink-muted)
+   .onPressed on-tap))
+
+(defn editor-toolbar
+  [!state _cfg]
+  (f/widget
+   :context ctx
+   :watch [state-val !state]
+   (let [active-id (:active-block-id state-val)
+         block (get-in state-val [:blocks active-id])
+         block-type (:type block :paragraph)
+         link-info (link/selection-link-info state-val)
+         has-image? (boolean (or (get-in block [:data :asset-id])
+                                 (seq (get-in block [:data :url]))))
+         link-active? (boolean
+                       (or (and (= block-type :image) has-image?)
+                           (and link-info (not (str/blank? (:href link-info))))))]
+     (m/ExcludeFocus
+      .child
+      (m/Listener
+       .onPointerDown (fn [_] (link/remember-selection! !state) nil)
+       .child
+       (m/Container
+        .height 50.0
+        .width double/infinity
+        .decoration (m/BoxDecoration
+                     .color theme/surface
+                     .border (m/Border .top (m/BorderSide .color theme/divider .width 1.0)))
+        .child
+        (if-not active-id
+          (m/Center
+           .child (m/Text "Select a block to edit"
+                          .style (m/TextStyle .color theme/ink-faint
+                                              .fontFamily theme/font-family)))
+          (m/SingleChildScrollView
+           .scrollDirection m.Axis/horizontal
+           .child
+           (m/Row
+            .children
+            [(m/SizedBox .width 8.0)
+             (toolbar-button m.Icons/notes "Text" (= block-type :paragraph)
+                             #(ops/convert-block! !state active-id :paragraph))
+             (m/VerticalDivider .indent 12.0 .endIndent 12.0 .width 16.0
+                                .color theme/divider)
+             (toolbar-button m.Icons/title "Heading 1" (= block-type :heading-1)
+                             #(ops/convert-block! !state active-id :heading-1))
+             (toolbar-button m.Icons/format_size "Heading 2" (= block-type :heading-2)
+                             #(ops/convert-block! !state active-id :heading-2))
+             (toolbar-button m.Icons/text_fields "Heading 3" (= block-type :heading-3)
+                             #(ops/convert-block! !state active-id :heading-3))
+             (m/VerticalDivider .indent 12.0 .endIndent 12.0 .width 16.0
+                                .color theme/divider)
+             (toolbar-button m.Icons/link "Link" link-active?
+                             (fn []
+                               (if (= block-type :image)
+                                 (nimage/pick-into-block! ctx !state active-id)
+                                 (do (link/remember-selection! !state)
+                                     (link/open-link-dialog! !state)))))
+             (m/VerticalDivider .indent 12.0 .endIndent 12.0 .width 16.0
+                                .color theme/divider)
+             (toolbar-button m.Icons/format_list_bulleted "List" (= block-type :list-item)
+                             #(ops/convert-block! !state active-id :list-item))
+             (toolbar-button m.Icons/format_list_numbered "Numbered List"
+                             (= block-type :ordered-list-item)
+                             #(ops/convert-block! !state active-id :ordered-list-item))
+             (toolbar-button m.Icons/check_box "Task" (= block-type :task)
+                             #(ops/convert-block! !state active-id :task))
+             (toolbar-button m.Icons/format_quote "Quote" (= block-type :blockquote)
+                             #(ops/convert-block! !state active-id :blockquote))
+             (m/VerticalDivider .indent 12.0 .endIndent 12.0 .width 16.0
+                                .color theme/divider)
+             (toolbar-button m.Icons/image "Image" (= block-type :image)
+                             #(nimage/pick-into-block! ctx !state active-id))
+             (toolbar-button m.Icons/horizontal_rule "Divider" (= block-type :divider)
+                             #(ops/convert-block! !state active-id :divider))
+             (toolbar-button m.Icons/bookmark_border "Bookmark" (= block-type :bookmark)
+                             (fn []
+                               (let [current-content (get-in state-val [:blocks active-id :content] "")
+                                     is-url? (str/starts-with? current-content "http")]
+                                 (ops/convert-block! !state active-id :bookmark)
+                                 (tx/commit-transaction!
+                                  !state
+                                  (tx/make-transaction
+                                   :ops [(tx/update-data-op active-id
+                                                            {:url (if is-url? current-content "")
+                                                             :title (if is-url? current-content "Web Bookmark")
+                                                             :desc "External web page reference"})
+                                         (tx/update-data-op active-id {:content (if is-url? "" current-content)})]
+                                   :after-selection nil)))))
+             (toolbar-button m.Icons/lightbulb_outline "Callout" (= block-type :callout)
+                             #(ops/convert-block! !state active-id :callout))
+             (toolbar-button m.Icons/arrow_right "Toggle List" (= block-type :toggle)
+                             #(ops/convert-block! !state active-id :toggle))
+             (m/SizedBox .width 16.0)])))))))))

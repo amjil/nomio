@@ -1,0 +1,298 @@
+(ns nomio.content.image
+  "Image blocks store an asset-id (spec). Display URL is built from the
+   client API base so emulator hosts stay correct, and Image.network sends
+   the session token so draft files (owner-only) actually load."
+  (:require ["package:flutter/material.dart" :as m]
+            ["package:file_picker/file_picker.dart" :as fp]
+            ["dart:async" :as async]
+            [cljd.flutter :as f]
+            [clojure.string :as str]
+            [block-editor.commands.ops :as ops]
+            [rich-editor.commands.editor-commands :as editor-cmd]
+            [rich-editor.commands.transaction :as tx]
+            [nomio.core.api :as api]
+            [nomio.core.http :as http]
+            [nomio.state.store :as store]
+            [nomio.theme :as theme]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.toast :as toast]
+            [nomio.widgets.ui :as ui]))
+
+(def ^:private default-width-ratio 0.5)
+(def ^:private min-width-ratio 0.15)
+(def ^:private max-width-ratio 1.0)
+(def ^:private handle-size 10.0)
+(def ^:private handle-hit-slop 8.0)
+
+;; block-id → :picking | :uploading. Not in the document — autosave must not
+;; persist a spinner.
+(defonce ^:private !uploads (atom {}))
+
+(defn file-url
+  "Client-side file URL. Prefer this over the server's `url` so Android's
+   10.0.2.2 and a desktop 127.0.0.1 stay on the same host the app talks to."
+  [asset-id]
+  (when (seq asset-id)
+    (str http/base-url "/assets/" asset-id "/file")))
+
+(defn- display-url [block]
+  (or (file-url (get-in block [:data :asset-id]))
+      (let [url (get-in block [:data :url] "")]
+        (when (and (seq url) (not (str/includes? url "picsum.photos")))
+          url))))
+
+(defn- image-headers []
+  (if-let [tok (:token @store/session)]
+    {"Authorization" (str "Bearer " tok)}
+    {}))
+
+(defn- network-image [url {:keys [fit width hero-tag]}]
+  (let [img (m/Image.network url
+                             .headers (image-headers)
+                             .fit (or fit m.BoxFit/cover)
+                             .width width
+                             .errorBuilder
+                             (fn [_ _ _]
+                               (m/Container
+                                .width (or width 160.0)
+                                .height 100.0
+                                .color theme/surface-alt
+                                .child (m/Center
+                                        .child (m/Icon m.Icons/broken_image
+                                                       .color theme/ink-faint)))))]
+    (if hero-tag
+      (m/Hero .tag hero-tag .child img)
+      img)))
+
+(defn- apply-asset! [!state block-id asset]
+  (when (and block-id (:id asset))
+    (let [ratio (get-in @!state [:blocks block-id :data :width-ratio]
+                        default-width-ratio)]
+      (tx/commit-transaction!
+       !state
+       (tx/make-transaction
+        :ops [(tx/update-data-op block-id
+                                 {:asset-id (:id asset)
+                                  :url (or (file-url (:id asset)) (:url asset) "")
+                                  :width-ratio ratio
+                                  :content ""})]
+        :after-selection nil))))
+  nil)
+
+(defn- first-path [result]
+  (when result
+    (when-let [file (first (.-files result))]
+      (.-path file))))
+
+(defn pick-into-block!
+  "Pick an image, upload it as a Nomio asset, and hang it on `block-id`.
+   Converts the block to :image if it is not one yet."
+  [ctx !state block-id]
+  (when (and block-id (nil? (get @!uploads block-id)))
+    (swap! !uploads assoc block-id :picking)
+    (-> (fp/FilePicker.platform.pickFiles .type fp/FileType.image .allowMultiple false)
+        (.then (fn [result]
+                 (if-let [path (first-path result)]
+                   (do
+                     (ops/convert-block! !state block-id :image)
+                     (swap! !uploads assoc block-id :uploading)
+                     (api/upload-asset! path))
+                   (do
+                     (swap! !uploads dissoc block-id)
+                     (async/Future.value nil)))))
+        (.then (fn [asset]
+                 (swap! !uploads dissoc block-id)
+                 (when asset
+                   (apply-asset! !state block-id asset))
+                 nil))
+        (.catchError (fn [e]
+                       (swap! !uploads dissoc block-id)
+                       (toast/error! ctx e)
+                       nil))))
+  nil)
+
+(defn- set-width-ratio! [!state block-id new-val]
+  (when (and !state block-id)
+    (tx/commit-transaction!
+     !state
+     (tx/make-transaction
+      :ops [(tx/update-data-op block-id {:width-ratio new-val})]
+      :after-selection nil)
+     :merge? true)))
+
+(defn- clamp-ratio [r]
+  (min max-width-ratio (max min-width-ratio r)))
+
+(defn- resize-handle [!state block-id screen-width]
+  (m/Positioned
+   .right 0.0
+   .bottom 8.0
+   .child
+   (m/MouseRegion
+    .cursor m.SystemMouseCursors/resizeDownRight
+    .child
+    (m/GestureDetector
+     .behavior m.HitTestBehavior/opaque
+     .onPanUpdate
+     (fn [^m/DragUpdateDetails details]
+       (let [dx (.-dx (.-delta details))
+             current (get-in @!state [:blocks block-id :data :width-ratio]
+                             default-width-ratio)
+             new-ratio (clamp-ratio (+ current (/ dx screen-width)))]
+         (set-width-ratio! !state block-id new-ratio))
+       nil)
+     .child
+     (m/Container
+      .width (+ handle-size (* 2.0 handle-hit-slop))
+      .height (+ handle-size (* 2.0 handle-hit-slop))
+      .alignment m.Alignment/center
+      .color m.Colors/transparent
+      .child
+      (m/Container
+       .width handle-size
+       .height handle-size
+       .decoration (m/BoxDecoration
+                    .color theme/surface
+                    .border (m/Border.all .color theme/accent .width 1.5)
+                    .boxShadow [(m/BoxShadow
+                                 .color (m/Color 0x33000000)
+                                 .blurRadius 2.0
+                                 .offset (m/Offset 0.0 1.0))])))))))
+
+(defn- placeholder [on-tap uploading?]
+  (ui/tappable
+   on-tap
+   theme/radius-md
+   (m/Container
+    .width 160.0
+    .height 120.0
+    .decoration (m/BoxDecoration
+                 .color theme/surface-alt
+                 .border (m/Border.all .color theme/divider)
+                 .borderRadius (theme/r theme/radius-md))
+    .child
+    (m/Center
+     .child
+     (if uploading?
+       (m/SizedBox
+        .width 22.0 .height 22.0
+        .child (m/CircularProgressIndicator
+                .strokeWidth 1.8 .color theme/accent))
+       (m/Column
+        .mainAxisSize m.MainAxisSize/min
+        .children
+        [(m/Icon m.Icons/add_photo_alternate_outlined
+                 .size 22.0 .color theme/ink-faint)
+         (ui/gap-v 8)
+         (mg/muted "Add image")]))))))
+
+(defn- fullscreen-route [url hero-tag]
+  (m/PageRouteBuilder
+   .opaque false
+   .barrierDismissible true
+   .barrierColor (m/Color 0xE6000000)
+   .pageBuilder
+   (fn [^m/BuildContext ctx animation _secondary]
+     (m/FadeTransition
+      .opacity animation
+      .child
+      (m/Scaffold
+       .backgroundColor theme/transparent
+       .body
+       (m/Stack
+        .fit m.StackFit/expand
+        .children
+        [(m/InteractiveViewer
+          .minScale 0.5
+          .maxScale 4.0
+          .child
+          (m/Center
+           .child
+           (m/GestureDetector
+            .onTap (fn [] (.pop (m/Navigator.of ctx)) nil)
+            .child (network-image url {:fit m.BoxFit/contain
+                                       :hero-tag hero-tag}))))
+         (m/Positioned
+          .top 48.0 .right 24.0
+          .child
+          (m/IconButton
+           .icon (m/Icon m.Icons/close .color m.Colors/white .size 32.0)
+           .onPressed (fn [] (.pop (m/Navigator.of ctx)) nil)))]))))))
+
+(defn- render-edit [id !state _index _cfg]
+  (f/widget
+   :watch [state-val !state
+           uploads !uploads]
+   (let [block (get-in state-val [:blocks id])
+         url (display-url block)
+         width-ratio (get-in block [:data :width-ratio] default-width-ratio)
+         is-active? (= id (:active-block-id state-val))
+         hero-tag (str "image-hero-" id)
+         uploading? (= :uploading (get uploads id))]
+     (m/Builder
+      .builder
+      (fn [^m/BuildContext ctx]
+        (let [screen-width (.-width (.-size (m.MediaQuery/of ctx)))
+              display-width (* screen-width width-ratio)
+              pick! #(pick-into-block! ctx !state id)]
+          (if-not url
+            (placeholder pick! uploading?)
+            (m/SizedBox
+             .width display-width
+             .child
+             (m/Stack
+              .clipBehavior m.Clip/none
+              .children
+              [(m/GestureDetector
+                .behavior m.HitTestBehavior/opaque
+                .onTap (fn [] (editor-cmd/focus-block !state id 0) nil)
+                .onDoubleTap
+                (fn []
+                  (-> (m/Navigator.of ctx)
+                      (.push (fullscreen-route url hero-tag)))
+                  nil)
+                .onLongPress pick!
+                .child
+                (m/Container
+                 .width display-width
+                 .margin (m.EdgeInsets/only .bottom 8.0)
+                 .padding (m.EdgeInsets/all 8.0)
+                 .decoration (m/BoxDecoration
+                              .color theme/surface
+                              .border (m/Border.all
+                                       .color (if is-active? theme/accent theme/divider)
+                                       .width (if is-active? 1.5 1.0))
+                              .borderRadius (theme/r theme/radius-md))
+                 .child
+                 (m/ClipRRect
+                  .borderRadius (theme/r theme/radius-sm)
+                  .child (network-image url {:fit m.BoxFit/cover
+                                             :width display-width
+                                             :hero-tag hero-tag}))))
+               (if is-active?
+                 (resize-handle !state id screen-width)
+                 ui/nothing)])))))))))
+
+(defn- render-read [block _base-style _on-link _!state]
+  (let [url (display-url block)
+        width-ratio (get-in block [:data :width-ratio] default-width-ratio)]
+    (if-not url
+      ui/nothing
+      (m/Builder
+       .builder
+       (fn [^m/BuildContext ctx]
+         (let [screen-width (.-width (.-size (m.MediaQuery/of ctx)))
+               display-width (* screen-width width-ratio)]
+           (m/Align
+            .alignment m.Alignment/topLeft
+            .child
+            (m/ClipRRect
+             .borderRadius (theme/r theme/radius-md)
+             .child (network-image url {:fit m.BoxFit/fitWidth
+                                        :width display-width})))))))))
+
+(defn image-plugin []
+  {:type :image
+   :text-block-type? false
+   :render render-edit
+   :render-read render-read})
