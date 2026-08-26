@@ -280,6 +280,19 @@
   (-> (http/post! (str "/contents/" id "/archive"))
       (.then data)))
 
+(defn- normalize-revision [r]
+  (cond-> r
+    (contains? r :document)
+    (update :document document<-api)))
+
+(defn revisions [id]
+  (-> (http/get! (str "/contents/" id "/revisions"))
+      (.then (fn [res] (mapv normalize-revision (or (:data res) []))))))
+
+(defn create-revision! [id]
+  (-> (http/post! (str "/contents/" id "/revisions"))
+      (.then (fn [res] (normalize-revision (:data res))))))
+
 (defn create-comment!
   [{:keys [target-type target-id parent-id content content-spans]}]
   (-> (http/post! "/comments"

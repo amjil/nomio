@@ -15,6 +15,7 @@
             [nomio.widgets.engage :as engage]
             [nomio.widgets.keyboard :as kb]
             [nomio.widgets.mongol :as mg]
+            [nomio.widgets.revisions :as revs]
             [nomio.widgets.sign-in :as sign-in]
             [nomio.widgets.toast :as toast]
             [nomio.widgets.ui :as ui]
@@ -219,6 +220,32 @@
         (ui/ghost-action {:label "Preview"
                           :icon m.Icons/visibility_outlined
                           :on-tap #(preview-dialog ctx @!state (.-text title-ctrl))})
+        (if id (ui/gap-v 10) ui/nothing)
+        (if id
+          (ui/ghost-action
+           {:label "History"
+            :icon m.Icons/history_rounded
+            :on-tap
+            (fn []
+              (revs/open! ctx {:content-id id
+                               :published-id (:published-revision-id content)
+                               :current-id (:current-revision-id content)
+                               :before-snapshot
+                               #(persist! !id type* question-id title-ctrl
+                                          tags-ctrl !state !save-status)
+                               :on-restore
+                               (fn [doc]
+                                 (when doc
+                                   (swap! !state
+                                          (fn [st]
+                                            (merge doc (select-keys st [:editor-config
+                                                                        :external-keyboard-delegate]))))
+                                   (persist! !id type* question-id title-ctrl
+                                             tags-ctrl !state !save-status)
+                                   (toast/success! ctx "Restored"))
+                                 nil)})
+              nil)})
+          ui/nothing)
         (ui/gap-v 10)
         (ui/action {:label "Publish"
                     :icon m.Icons/publish_rounded

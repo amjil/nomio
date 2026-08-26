@@ -1,0 +1,181 @@
+(ns nomio.widgets.revisions
+  "Version history for a piece of content. Authors can preview any revision
+   and copy one back into the working draft."
+  (:require ["package:flutter/material.dart" :as m]
+            ["dart:async" :as async]
+            [cljd.flutter :as f]
+            [nomio.content.reader :as nreader]
+            [nomio.core.api :as api]
+            [nomio.theme :as theme]
+            [nomio.widgets.async :as asy]
+            [nomio.widgets.confirm :as confirm]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.toast :as toast]
+            [nomio.widgets.ui :as ui]))
+
+(defn- newest-first [revs]
+  (vec (reverse (or revs []))))
+
+(defn- find-rev [revs id]
+  (some #(when (= (:id %) id) %) revs))
+
+(defn- version-label [r published-id current-id]
+  (let [v (str "v" (or (:version r) "?"))
+        id (:id r)]
+    (cond
+      (= id published-id) (str v " live")
+      (= id current-id) (str v " tip")
+      :else v)))
+
+(defn- pick-default [revs published-id current-id]
+  (or (find-rev revs current-id)
+      (find-rev revs published-id)
+      (first (newest-first revs))))
+
+(defn- version-list [revs sel published-id current-id on-pick]
+  (m/SingleChildScrollView
+   .child
+   (m/Column
+    .mainAxisSize m.MainAxisSize/min
+    .crossAxisAlignment m.CrossAxisAlignment/start
+    .children
+    (into []
+          (comp (map (fn [r]
+                       (ui/pill {:label (version-label r published-id current-id)
+                                 :active? (= (:id r) sel)
+                                 :on-tap #(on-pick (:id r))})))
+                (interpose (ui/gap-v 10)))
+          (newest-first revs)))))
+
+(defn- snapshot! [ctx content-id before-snapshot on-saved]
+  (-> (if before-snapshot
+        (before-snapshot)
+        (async/Future.value true))
+      (.then (fn [ok?]
+               (if-not ok?
+                 (throw (Exception. "save failed"))
+                 (api/create-revision! content-id))))
+      (.then (fn [rev]
+               (when (and rev (.-mounted ^m/BuildContext ctx))
+                 (on-saved rev)
+                 (toast/success! ctx "Snapshot saved"))
+               nil))
+      (.catchError (fn [e]
+                     (when (.-mounted ^m/BuildContext ctx)
+                       (toast/error! ctx e))
+                     nil)))
+  nil)
+
+(defn- restore! [ctx dctx rev on-restore]
+  (confirm/show! ctx {:title "Replace the working draft with this version?"
+                      :confirm-label "Restore"
+                      :on-confirm
+                      (fn []
+                        (when (.-mounted ^m/BuildContext dctx)
+                          (.pop (m/Navigator.of dctx)))
+                        (when on-restore
+                          (on-restore (:document rev)))
+                        nil)})
+  nil)
+
+(defn- body [ctx dctx revs sel published-id current-id
+             on-pick on-snapshot on-restore on-close]
+  (let [rev (or (find-rev revs sel) (pick-default revs published-id current-id))]
+    (m/Row
+     .crossAxisAlignment m.CrossAxisAlignment/stretch
+     .children
+     [(m/SizedBox
+       .width 72.0
+       .child
+       (m/Padding
+        .padding (m.EdgeInsets/fromLTRB 12.0 16.0 8.0 16.0)
+        .child (version-list revs (:id rev) published-id current-id on-pick)))
+      (m/Expanded
+       .child
+       (m/Padding
+        .padding (m.EdgeInsets/fromLTRB 4.0 12.0 8.0 12.0)
+        .child
+        (if rev
+          (nreader/widget (:document rev))
+          (asy/empty-state "No revisions yet"))))
+      (m/Padding
+       .padding (m.EdgeInsets/fromLTRB 8.0 14.0 14.0 14.0)
+       .child
+       (m/Column
+        .mainAxisAlignment m.MainAxisAlignment/spaceBetween
+        .crossAxisAlignment m.CrossAxisAlignment/center
+        .children
+        [(m/Column
+          .mainAxisSize m.MainAxisSize/min
+          .children
+          [(ui/icon-button {:icon m.Icons/close_rounded
+                            :size 32.0
+                            :on-tap on-close})
+           (ui/gap-v 12)
+           (mg/title (if rev (str "v" (:version rev)) "History") 16.0)])
+         (m/Column
+          .mainAxisSize m.MainAxisSize/min
+          .children
+          [(ui/ghost-action {:label "Snapshot"
+                             :icon m.Icons/camera_alt_outlined
+                             :on-tap on-snapshot})
+           (if (and rev on-restore) (ui/gap-v 10) ui/nothing)
+           (if (and rev on-restore)
+             (ui/action {:label "Restore"
+                         :icon m.Icons/restore_rounded
+                         :on-tap #(restore! ctx dctx rev on-restore)})
+             ui/nothing)])]))])))
+
+(defn open!
+  "History dialog. `on-restore` receives the revision document, or is omitted
+   when the viewer cannot edit. `before-snapshot` should persist the working
+   draft and resolve to a truthy value."
+  [ctx {:keys [content-id published-id current-id before-snapshot on-restore]}]
+  (when content-id
+    (m/showDialog
+     .context ctx
+     .builder
+     (fn [dctx]
+       (f/widget
+        :let [!st (atom {:status :loading})
+              !sel (atom nil)
+              !current (atom current-id)
+              load! (fn []
+                      (asy/load! dctx !st
+                                 (-> (api/revisions content-id)
+                                     (.then (fn [revs]
+                                              (when (nil? @!sel)
+                                                (when-let [r (pick-default revs published-id @!current)]
+                                                  (reset! !sel (:id r))))
+                                              revs))))
+                      nil)
+              _ (load!)]
+        :watch [st !st
+                sel !sel
+                current !current]
+        (m/Dialog
+         .backgroundColor theme/transparent
+         .insetPadding (m.EdgeInsets/all 28.0)
+         .child
+         (ui/panel
+          {:width 780.0
+           :height 520.0
+           :pad 0.0
+           :radius theme/radius-lg
+           :shadow theme/card-shadow}
+          (asy/view
+           !st
+           (fn [revs]
+             (body ctx dctx revs sel published-id current
+                   #(reset! !sel %)
+                   #(snapshot! ctx content-id before-snapshot
+                               (fn [rev]
+                                 (reset! !current (:id rev))
+                                 (reset! !sel (:id rev))
+                                 (load!)))
+                   on-restore
+                   (fn []
+                     (.pop (m/Navigator.of dctx))
+                     nil)))
+           :retry load!)))))))
+  nil)
