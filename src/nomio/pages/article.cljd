@@ -56,8 +56,7 @@
    :managed [_ime-control (kb/install)
              :dispose kb/restore-ime!]
    :let [!c (atom c)
-         !comments (asy/load! ctx (api/comments "article" (:id c)))
-         !reply (atom nil)]
+         !comments (asy/load! ctx (api/comments "article" (:id c)))]
    :watch [content !c]
    (let [mine? (= (:id (store/current-user)) (:author-id content))
          liked? (boolean (:liked content))
@@ -94,18 +93,7 @@
                                                 :on-link open-link)
                                 :title (:title content)))
 
-           (m/Expanded
-            .flex 2
-            .child
-            (frame/comments-pane
-             (asy/view !comments
-                       #(comments/tree % (fn [pid] (reset! !reply pid) nil)))
-             (comments/composer
-              :article (:id content)
-              :!reply-to !reply
-              :on-posted (fn []
-                           (asy/load! ctx !comments (api/comments "article" (:id content)))
-                           nil))))])))))))) 
+           (comments/column "article" (:id content) !comments)])))))))) 
 
 (defn screen [slug]
   (f/widget

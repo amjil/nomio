@@ -53,19 +53,23 @@
    .child (vk/keyboard {})))
 
 (defn wrap
-  "Wrap page body with mobile VK or desktop IME overlay."
-  [main-content]
-  (if (platform/mobile?)
-    (f/widget
-     :let [kb-info info]
-     :bind {:info kb-info}
-     (m/Column
-      .children
-      [(m/Expanded
-        .child
-        (m/Stack
-         .children
-         [main-content
-          (candidates)]))
-       (bar)]))
-    (overlay/ime-global-wrapper main-content)))
+  "Wrap page body with mobile VK or desktop IME overlay.
+
+   Pass `wrapper-id` when this sits in a dialog, so the desktop overlay
+   does not share a key with the page underneath (see mgl-mail-app)."
+  ([main-content] (wrap main-content "default-ime-wrapper"))
+  ([main-content wrapper-id]
+   (if (platform/mobile?)
+     (f/widget
+      :let [kb-info info]
+      :bind {:info kb-info}
+      (m/Column
+       .children
+       [(m/Expanded
+         .child
+         (m/Stack
+          .children
+          [main-content
+           (candidates)]))
+        (bar)]))
+     (overlay/ime-global-wrapper main-content wrapper-id))))

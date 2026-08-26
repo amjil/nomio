@@ -1,19 +1,23 @@
 (ns nomio.widgets.comments
-  "Comments use mgl-richtext-editor (simple-editor), not the block editor.
-   Laid out for traditional vertical Mongolian: a line grows downward,
-   the next line steps to the right."
+  "Comment thread plus a compose dialog. The list stays collapsed to a
+   count so the paper can use the width; writing happens in
+   components.dialog/vertical-custom-dialog, wrapped with kb/wrap so
+   Mongolian IME candidates paint (same pattern as mgl-mail-app)."
   (:require ["package:flutter/material.dart" :as m]
+            ["package:mongol/mongol.dart" :as mgl]
             [cljd.flutter :as f]
             [clojure.string :as str]
-            [rich-editor.components.simple-editor :as se]
+            [components.dialog :as dialog]
+            [rich-editor.components.text-field :as custom-tf]
             [nomio.core.api :as api]
             [nomio.state.store :as store]
             [nomio.theme :as theme]
+            [nomio.widgets.async :as asy]
+            [nomio.widgets.keyboard :as kb]
             [nomio.widgets.mongol :as mg]
+            [nomio.widgets.reader-frame :as frame]
             [nomio.widgets.toast :as toast]
             [nomio.widgets.ui :as ui]))
-
-(def ^:private post-id "main-post-id")
 
 ;; "reply" in Mongolian script.
 (def ^:private reply-label "ᠬᠠᠷᠢᠭᠤᠯᠬᠤ")
@@ -129,76 +133,206 @@
                  (comment-node c by-parent on-reply 0)))
               roots))))))
 
-(defn- send! [ctx !ed !tick !reply target-type target-id on-posted]
-  (store/require-auth!
-   (fn []
-     (let [content (or (get-in @!ed [:blocks post-id :content]) "")
-           spans (or (get-in @!ed [:blocks post-id :content-spans]) [])]
-       (if (str/blank? content)
-         (toast/info! ctx "Write something first")
-         (-> (api/create-comment!
-              (cond-> {:target-type target-type
-                       :target-id target-id
-                       :content (str/trim content)
-                       :content-spans spans}
-                @!reply (assoc :parent-id @!reply)))
-             (.then (fn [_]
-                      (when (.-mounted ^m/BuildContext ctx)
-                        (reset! !ed @(se/init-simple-state))
-                        (reset! !reply nil)
-                        (swap! !tick inc)
-                        (when on-posted (on-posted))
-                        (toast/success! ctx "Comment posted"))
-                      nil))
-             (.catchError (fn [e]
-                            (when (.-mounted ^m/BuildContext ctx)
-                              (toast/error! ctx e))
-                            nil)))))))
+(defn- close-dialog! [dctx]
+  (kb/dismiss!)
+  (when (.-mounted ^m/BuildContext dctx)
+    (.pop (m/Navigator.of dctx)))
   nil)
 
-(defn- replying-chip [!reply]
-  (m/Column
-   .mainAxisSize m.MainAxisSize/min
-   .crossAxisAlignment m.CrossAxisAlignment/center
-   .children
-   [(ui/icon-button {:icon m.Icons/close_rounded
-                     :size 26.0
-                     :on-tap #(reset! !reply nil)})
-    (ui/gap-v 8)
-    (m/Icon m.Icons/reply_rounded .size 15.0 .color theme/accent)
-    (ui/gap-v 6)
-    (mg/text reply-label {:size 12.5 :color theme/accent})]))
+(defn- send-plain! [ctx dctx ctrl target-type target-id parent-id on-posted]
+  (let [content (str/trim (or (.-text ^m/TextEditingController ctrl) ""))]
+    (if (str/blank? content)
+      (toast/info! ctx "Write something first")
+      (-> (api/create-comment!
+           (cond-> {:target-type target-type
+                    :target-id target-id
+                    :content content}
+             parent-id (assoc :parent-id parent-id)))
+          (.then (fn [_]
+                   (close-dialog! dctx)
+                   (when on-posted (on-posted))
+                   (toast/success! ctx "Comment posted")
+                   nil))
+          (.catchError (fn [e]
+                         (toast/error! ctx e)
+                         nil)))))
+  nil)
 
-(defn composer
-  [target-type target-id & {:keys [on-posted parent-id !reply-to]}]
+(defn- field-box [ctrl focus !ime]
+  (m/GestureDetector
+   .behavior m.HitTestBehavior/opaque
+   .onTap (fn [] (.requestFocus ^m/FocusNode focus) nil)
+   .child
+   (m/Container
+    .padding (m.EdgeInsets/all 8.0)
+    .alignment m.Alignment/topLeft
+    .decoration (m/BoxDecoration
+                 .color theme/surface-alt
+                 .border (m/Border.all .color theme/divider)
+                 .borderRadius (theme/r theme/radius-md))
+    .child
+    (custom-tf/text-field
+     !ime
+     {:controller ctrl
+      :focus-node focus
+      :autofocus true
+      :hint "Write a comment"
+      :max-lines nil
+      :style (m/TextStyle .fontSize 16.0
+                          .fontFamily theme/font-family
+                          .color theme/ink)
+      :decoration (m/InputDecoration .border m/InputBorder.none)}))))
+
+(defn- dialog-action [label on-tap accent?]
+  (mgl/MongolTextButton
+   .onPressed on-tap
+   .child (mgl/MongolText
+           label
+           .style (m/TextStyle .fontFamily theme/font-family
+                               .fontSize 14.0
+                               .color (if accent? theme/accent theme/ink-muted)
+                               .fontWeight (if accent? m.FontWeight/w600 m.FontWeight/w400)))))
+
+(defn- compose-body [dctx ctrl focus !ime parent-id on-send]
+  (m/Padding
+   .padding (m.EdgeInsets/all 18.0)
+   .child
+   (m/Row
+    .crossAxisAlignment m.CrossAxisAlignment/stretch
+    .children
+    [(m/Container
+      .alignment m.Alignment/topCenter
+      .padding (m.EdgeInsets/only .right 16.0)
+      .decoration (m/BoxDecoration
+                   .border (m/Border .right (m/BorderSide .color theme/divider .width 1.0)))
+      .child (mg/title (if parent-id reply-label "Comment") 16.0))
+     (m/Expanded .child (field-box ctrl focus !ime))
+     (m/Padding
+      .padding (m.EdgeInsets/only .left 16.0)
+      .child
+      (m/Column
+       .mainAxisAlignment m.MainAxisAlignment/end
+       .children
+       [(dialog-action "Cancel" #(close-dialog! dctx) false)
+        (ui/gap-v 16)
+        (dialog-action "Send" on-send true)]))])))
+
+(defn- compose-dialog! [ctx target-type target-id parent-id on-posted]
+  (m/showDialog
+   .context ctx
+   .builder
+   (fn [dctx]
+     (f/widget
+      :managed [ctrl (m/TextEditingController.)
+                focus (m/FocusNode.)]
+      :let [!ime (atom {:external-keyboard-delegate nil})
+            send! #(send-plain! ctx dctx ctrl target-type
+                                target-id parent-id on-posted)]
+      ;; `:child` so kb/wrap lives *inside* the sized dialog: mobile VK
+      ;; sits on the dialog, desktop candidates overlay it — same idea as
+      ;; mail-app wrapping vertical-custom-dialog with ime-global-wrapper.
+      (dialog/vertical-custom-dialog
+       {:width-factor 0.72
+        :height-factor 0.72
+        :child (kb/wrap (compose-body dctx ctrl focus !ime parent-id send!)
+                        "comment-dialog-ime")}))))
+  nil)
+
+(defn compose!
+  "Open the comment dialog. Guests are sent to sign-in first."
+  [ctx target-type target-id & {:keys [parent-id on-posted]}]
+  (store/require-auth!
+   (fn []
+     (compose-dialog! ctx target-type target-id parent-id on-posted)))
+  nil)
+
+(defn- count-mark [st]
+  (cond
+    (= :ok (:status st))
+    (mg/text (str (count (:data st)))
+             {:size 13.0 :color theme/ink-muted :weight m.FontWeight/w600})
+    (= :error (:status st))
+    (m/Icon m.Icons/error_outline_rounded .size 14.0 .color theme/danger)
+    :else
+    (m/SizedBox
+     .width 14.0 .height 14.0
+     .child (m/CircularProgressIndicator
+             .strokeWidth 1.8 .color theme/accent))))
+
+(defn- rail [st on-open on-write]
+  (m/Container
+   .decoration (m/BoxDecoration
+                .border (m/Border .left (m/BorderSide .color theme/divider .width 1.0)))
+   .child
+   (m/Padding
+    .padding (m.EdgeInsets/fromLTRB 10.0 18.0 10.0 18.0)
+    .child
+    (m/Column
+     .mainAxisAlignment m.MainAxisAlignment/spaceBetween
+     .crossAxisAlignment m.CrossAxisAlignment/center
+     .children
+     [(ui/tappable
+       on-open theme/radius-sm
+       (m/Padding
+        .padding (m.EdgeInsets/symmetric .horizontal 4.0 .vertical 6.0)
+        .child
+        (m/Column
+         .mainAxisSize m.MainAxisSize/min
+         .crossAxisAlignment m.CrossAxisAlignment/center
+         .children
+         [(m/Icon m.Icons/mode_comment_outlined .size 15.0 .color theme/ink-faint)
+          (ui/gap-v 10)
+          (mg/label "Comments")
+          (ui/gap-v 10)
+          (count-mark st)])))
+      (ui/icon-button {:icon m.Icons/edit_outlined
+                       :size 36.0
+                       :active? true
+                       :on-tap on-write})]))))
+
+(defn column
+  "Trailing comments column. Collapsed to a count until opened; writing
+   always goes through `compose!` so the paper keeps its width."
+  [target-type target-id !comments]
   (f/widget
    :context ctx
-   ;; State lives in :let so a rebuild does not discard the draft.
-   :let [!ed (se/init-simple-state)
-         !tick (atom 0)
-         !actual-reply (or !reply-to (atom parent-id))]
-   :watch [_ !tick
-           reply !actual-reply]
-   (ui/panel
-    {:pad 8.0
-     :width 168.0
-     :radius theme/radius-lg
-     :color theme/surface}
-    ;; One chrome rail on the trailing edge. Chip and send stacked
-    ;; vertically share a single column of width, so a narrow pane
-    ;; cannot overflow the Row the way three side-by-side children did.
-    (m/Row
-     .crossAxisAlignment m.CrossAxisAlignment/stretch
-     .children
-     [(m/Expanded .child (se/simple-editor !ed))
-      (ui/gap-h 6)
-      (m/Column
-       .mainAxisAlignment m.MainAxisAlignment/spaceBetween
-       .crossAxisAlignment m.CrossAxisAlignment/center
-       .children
-       [(if reply (replying-chip !actual-reply) ui/nothing)
-        (ui/icon-button {:icon m.Icons/send_rounded
-                         :active? true
-                         :size 36.0
-                         :on-tap #(send! ctx !ed !tick !actual-reply
-                                         target-type target-id on-posted)})])]))))
+   :let [!open (atom false)
+         fetch (fn [] (api/comments target-type target-id))
+         reload! (fn [] (asy/load! ctx !comments (fetch)) nil)]
+   :watch [open? !open
+           st !comments]
+   (let [write! (fn [pid]
+                  (compose! ctx target-type target-id
+                            :parent-id pid
+                            :on-posted (fn []
+                                         (reset! !open true)
+                                         (reload!)))
+                  nil)]
+     (if-not open?
+       (rail st #(reset! !open true) #(write! nil))
+       (m/Expanded
+        .flex 2
+        .child
+        (frame/pane
+         {:label "Comments" :icon m.Icons/mode_comment_outlined}
+         (m/Row
+          .crossAxisAlignment m.CrossAxisAlignment/stretch
+          .children
+          [(m/Expanded
+            .child (asy/view !comments
+                             #(tree % write!)
+                             :retry reload!))
+           (m/Padding
+            .padding (m.EdgeInsets/only .left 4.0 .right 8.0 .top 12.0 .bottom 12.0)
+            .child
+            (m/Column
+             .mainAxisAlignment m.MainAxisAlignment/spaceBetween
+             .crossAxisAlignment m.CrossAxisAlignment/center
+             .children
+             [(ui/icon-button {:icon m.Icons/close_rounded
+                               :size 32.0
+                               :on-tap #(reset! !open false)})
+              (ui/icon-button {:icon m.Icons/edit_outlined
+                               :size 36.0
+                               :active? true
+                               :on-tap #(write! nil)})]))])))))))

@@ -79,8 +79,7 @@
    :managed [_ime-control (kb/install)
              :dispose kb/restore-ime!]
    :let [!a (atom a)
-         !comments (asy/load! ctx (api/comments "answer" (:id a)))
-         !reply (atom nil)]
+         !comments (asy/load! ctx (api/comments "answer" (:id a)))]
    :watch [ans !a]
    (m/Scaffold
     .backgroundColor theme/bg
@@ -113,18 +112,7 @@
           .child (frame/paper (nreader/widget (:document ans))
                               :title (:title ans)))
 
-         (m/Expanded
-          .flex 2
-          .child
-          (frame/comments-pane
-           (asy/view !comments
-                     #(comments/tree % (fn [pid] (reset! !reply pid) nil)))
-           (comments/composer
-            :answer (:id ans)
-            :!reply-to !reply
-            :on-posted (fn []
-                         (asy/load! ctx !comments (api/comments "answer" (:id ans)))
-                         nil))))])))))))
+         (comments/column "answer" (:id ans) !comments)])))))))
 
 (defn- fetch
   "An answer plus its parent question. A missing question still renders the

@@ -131,18 +131,3 @@
         (ui/gap-v 10)
         (mg/label label)]))
      (m/Expanded .child body)])))
-
-(defn comments-pane [list-widget composer-widget]
-  (pane
-   {:label "Comments" :icon m.Icons/mode_comment_outlined}
-   ;; Side by side so both get the full Scaffold height. Mongolian text
-   ;; grows downward; a Column would split that height and clip long lines.
-   ;; The composer is a writing column with its own width — not a flex
-   ;; child — so the list can take every leftover pixel.
-   (m/Row
-    .crossAxisAlignment m.CrossAxisAlignment/stretch
-    .children
-    [(m/Expanded .child list-widget)
-     (m/Padding
-      .padding (m.EdgeInsets/only .left 8.0 .right 8.0 .bottom 12.0)
-      .child composer-widget)])))
