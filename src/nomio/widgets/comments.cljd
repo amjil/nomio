@@ -83,8 +83,11 @@
 
 (def ^:private reply-page-size 20)
 
+(defn- replies-left [c]
+  (- (or (:reply-count c) 0) (count (or (:replies c) []))))
+
 (defn- more-replies-control [c on-more]
-  (let [left (- (or (:reply-count c) 0) (count (or (:replies c) [])))
+  (let [left (replies-left c)
         tap #(on-more (:id c))]
     (cond
       (= :paging (:replies-status c))
@@ -129,7 +132,7 @@
         kids (when-not leaf? (or (:replies c) []))
         more? (and (not leaf?)
                    on-more
-                   (pos? (- (or (:reply-count c) 0) (count kids))))]
+                   (pos? (replies-left c)))]
     (m/Row
      .crossAxisAlignment m.CrossAxisAlignment/start
      .mainAxisSize m.MainAxisSize/min
@@ -144,10 +147,10 @@
       ;; Replies hang off the right of the root. Top indent is the
       ;; nested step in vertical script (the analogue of a left gutter
       ;; in horizontal text); the rule marks the thread.
-      (cond-> (map (fn [k]
-                     (thread-step (comment-node k on-reply nil (inc depth))))
-                   kids)
-        more? (concat [(thread-step (more-replies-control c on-more))]))))))
+      (cond-> (mapv (fn [k]
+                      (thread-step (comment-node k on-reply nil (inc depth))))
+                    kids)
+        more? (conj (thread-step (more-replies-control c on-more)))))))
 
 (defn- thread-card [c on-reply on-more]
   (ui/panel
@@ -339,7 +342,8 @@
         root (some #(when (= (:id %) id) %) (:items st))]
     (when (and root
                (.-mounted ^m/BuildContext ctx)
-               (not= :paging (:replies-status root)))
+               (not= :paging (:replies-status root))
+               (pos? (replies-left root)))
       (patch-thread! !st id #(assoc % :replies-status :paging))
       (-> (api/comment-replies id {:limit reply-page-size
                                    :offset (count (or (:replies root) []))})
@@ -350,10 +354,15 @@
                                     (fn [c]
                                       (let [seen (into #{} (map :id) (:replies c))
                                             fresh (into [] (remove #(contains? seen (:id %))
-                                                                   (:items page)))
+                                                                   (or (:items page) [])))
                                             loaded (into (vec (or (:replies c) [])) fresh)
                                             n (count loaded)
-                                            total (if (false? (:has-more page))
+                                            ;; Same rule as paged/ended?: an empty window
+                                            ;; or the server saying stop both hide More,
+                                            ;; so a stuck offset cannot loop.
+                                            done? (or (empty? fresh)
+                                                      (false? (:has-more page)))
+                                            total (if done?
                                                     n
                                                     (or (:reply-total page)
                                                         (:reply-count c)
