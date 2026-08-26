@@ -12,6 +12,7 @@
             [nomio.core.api :as api]
             [nomio.state.store :as store]
             [nomio.theme :as theme]
+            [nomio.widgets.confirm :as confirm]
             [nomio.widgets.keyboard :as kb]
             [nomio.widgets.mongol :as mg]
             [nomio.widgets.paged :as paged]
@@ -120,6 +121,25 @@
           (ui/gap-v 6)
           (mg/text "More" {:size 12.5 :color theme/accent})]))))))
 
+(defn- mine? [c]
+  (when-let [me (store/current-user)]
+    (= (:id me) (or (:author-id c) (get-in c [:author :id])))))
+
+(defn- owner-col [icon color on-tap]
+  (ui/tappable
+   on-tap theme/radius-sm
+   (m/Padding
+    .padding (m.EdgeInsets/symmetric .horizontal 6.0 .vertical 8.0)
+    .child (ui/top (m/Icon icon .size 15.0 .color color)))))
+
+(defn- owner-controls [c on-edit on-delete]
+  (m/Row
+   .mainAxisSize m.MainAxisSize/min
+   .children
+   [(owner-col m.Icons/edit_outlined theme/ink-muted #(on-edit c))
+    (ui/gap-h 4)
+    (owner-col m.Icons/delete_outline_rounded theme/danger #(on-delete c))]))
+
 (defn- comment-node
   "One comment and, at depth 0 only, its replies. A Row, not a Column: the
    byline, body, reply control and nested replies step left to right so
@@ -127,12 +147,13 @@
    Depth is capped at two (root + reply); replies do not nest further, but
    a second-level comment can still be replied to — the new one hangs next
    to its siblings with a grey @author pointing at the original."
-  [c on-reply on-more depth]
+  [c {:keys [on-reply on-more on-edit on-delete] :as handlers} depth]
   (let [leaf? (>= depth 1)
         kids (when-not leaf? (or (:replies c) []))
         more? (and (not leaf?)
                    on-more
-                   (pos? (replies-left c)))]
+                   (pos? (replies-left c)))
+        own? (boolean (mine? c))]
     (m/Row
      .crossAxisAlignment m.CrossAxisAlignment/start
      .mainAxisSize m.MainAxisSize/min
@@ -143,30 +164,32 @@
        (reply-to-mark c)
        (mg/text (or (:content c) "") {:size 14.5 :height 1.3})
        (if on-reply (ui/gap-h 10) ui/nothing)
-       (if on-reply (reply-link on-reply (:id c)) ui/nothing)]
+       (if on-reply (reply-link on-reply (:id c)) ui/nothing)
+       (if own? (ui/gap-h 8) ui/nothing)
+       (if own? (owner-controls c on-edit on-delete) ui/nothing)]
       ;; Replies hang off the right of the root. Top indent is the
       ;; nested step in vertical script (the analogue of a left gutter
       ;; in horizontal text); the rule marks the thread. Locally posted
       ;; replies that belong after the unloaded window sit past More.
       (let [kid-nodes (mapv (fn [k]
-                              (thread-step (comment-node k on-reply nil (inc depth))))
+                              (thread-step (comment-node k handlers (inc depth))))
                             kids)
             pending (when-not leaf? (or (:pending-replies c) []))]
         (cond-> kid-nodes
           more? (conj (thread-step (more-replies-control c on-more)))
           (seq pending)
           (into (mapv (fn [k]
-                        (thread-step (comment-node k on-reply nil (inc depth))))
+                        (thread-step (comment-node k handlers (inc depth))))
                       pending))))))))
 
-(defn- thread-card [c on-reply on-more]
+(defn- thread-card [c handlers]
   (ui/panel
    ;; No locked width: MongolText wraps to the next column when it runs
    ;; out of height, and the card grows with it.
    {:margin (m.EdgeInsets/symmetric .horizontal 8.0 .vertical 14.0)
     :pad 16.0
     :radius theme/radius-md}
-   (comment-node c on-reply on-more 0)))
+   (comment-node c handlers 0)))
 
 (defn- close-dialog! [dctx]
   (kb/dismiss!)
@@ -174,7 +197,7 @@
     (.pop (m/Navigator.of dctx)))
   nil)
 
-(defn- send-plain! [ctx dctx ctrl target-type target-id parent-id on-posted !busy]
+(defn- send-plain! [ctx dctx ctrl !busy submit! success]
   (let [content (str/trim (or (.-text ^m/TextEditingController ctrl) ""))]
     (cond
       (str/blank? content)
@@ -186,15 +209,10 @@
       :else
       (do
         (reset! !busy true)
-        (-> (api/create-comment!
-             (cond-> {:target-type target-type
-                      :target-id target-id
-                      :content content}
-               parent-id (assoc :parent-id parent-id)))
-            (.then (fn [posted]
+        (-> (submit! content)
+            (.then (fn [_]
                      (close-dialog! dctx)
-                     (when on-posted (on-posted posted))
-                     (toast/success! ctx "Comment posted")
+                     (toast/success! ctx success)
                      nil))
             (.catchError (fn [e]
                            (reset! !busy false)
@@ -237,7 +255,7 @@
                                .color (if accent? theme/accent theme/ink-muted)
                                .fontWeight (if accent? m.FontWeight/w600 m.FontWeight/w400)))))
 
-(defn- compose-body [dctx ctrl focus !ime parent-id on-send !busy]
+(defn- compose-body [dctx ctrl focus !ime title on-send send-label !busy]
   (f/widget
    :watch [busy? !busy]
    (m/Padding
@@ -251,7 +269,7 @@
        .padding (m.EdgeInsets/only .right 16.0)
        .decoration (m/BoxDecoration
                     .border (m/Border .right (m/BorderSide .color theme/divider .width 1.0)))
-       .child (mg/title (if parent-id reply-label "Comment") 16.0))
+       .child (mg/title title 16.0))
       (m/Expanded .child (field-box ctrl focus !ime))
       (m/Padding
        .padding (m.EdgeInsets/only .left 16.0)
@@ -261,27 +279,28 @@
         .children
         [(dialog-action "Cancel" #(close-dialog! dctx) false)
          (ui/gap-v 16)
-         (dialog-action "Send" (when-not busy? on-send) true)]))]))))
+         (dialog-action send-label (when-not busy? on-send) true)]))]))))
 
-(defn- compose-dialog! [ctx target-type target-id parent-id on-posted]
+(defn- text-dialog!
+  [ctx {:keys [title initial send-label submit! success]}]
   (m/showDialog
    .context ctx
    .builder
    (fn [dctx]
      (f/widget
-      :managed [ctrl (m/TextEditingController.)
+      :managed [ctrl (m/TextEditingController. .text (or initial ""))
                 focus (m/FocusNode.)]
       :let [!ime (atom {:external-keyboard-delegate nil})
             !busy (atom false)
-            send! #(send-plain! ctx dctx ctrl target-type
-                                target-id parent-id on-posted !busy)]
-      ;; `:child` so kb/wrap lives *inside* the sized dialog: mobile VK
-      ;; sits on the dialog, desktop candidates overlay it — same idea as
-      ;; mail-app wrapping vertical-custom-dialog with ime-global-wrapper.
+            send! #(send-plain! ctx dctx ctrl !busy submit! success)]
       (dialog/vertical-custom-dialog
        {:width-factor 0.72
         :height-factor 0.72
-        :child (kb/wrap (compose-body dctx ctrl focus !ime parent-id send! !busy)
+        :child (kb/wrap (compose-body dctx ctrl focus !ime
+                                     (or title "Comment")
+                                     send!
+                                     (or send-label "Send")
+                                     !busy)
                         "comment-dialog-ime")}))))
   nil)
 
@@ -290,7 +309,19 @@
   [ctx target-type target-id & {:keys [parent-id on-posted]}]
   (store/require-auth!
    (fn []
-     (compose-dialog! ctx target-type target-id parent-id on-posted)))
+     (text-dialog! ctx {:title (if parent-id reply-label "Comment")
+                        :send-label "Send"
+                        :success "Comment posted"
+                        :submit!
+                        (fn [content]
+                          (-> (api/create-comment!
+                               (cond-> {:target-type target-type
+                                        :target-id target-id
+                                        :content content}
+                                 parent-id (assoc :parent-id parent-id)))
+                              (.then (fn [posted]
+                                       (when on-posted (on-posted posted))
+                                       posted))))})))
   nil)
 
 (defn- count-mark [st]
@@ -396,6 +427,89 @@
     (swap! !st update :comment-total #(inc (or % 0))))
   nil)
 
+(defn- map-deep [c id f]
+  (if (= (:id c) id)
+    (f c)
+    (-> c
+        (update :replies #(mapv (fn [k] (map-deep k id f)) (or % [])))
+        (update :pending-replies
+                #(mapv (fn [k] (map-deep k id f)) (or % []))))))
+
+(defn- apply-edit! [!st updated]
+  (when (and updated (:id updated))
+    (let [id (:id updated)
+          bump (fn [c]
+                 (assoc c
+                        :content (:content updated)
+                        :content-spans (or (:content-spans updated) [])
+                        :updated-at (:updated-at updated)))]
+      (swap! !st (fn [st]
+                   (let [touch (fn [xs] (mapv #(map-deep % id bump) xs))]
+                     (-> st
+                         (update :items touch)
+                         (update :pinned #(touch (or % [])))))))))
+  nil)
+
+(defn- drop-id [xs id]
+  (into [] (remove #(= (:id %) id)) (or xs [])))
+
+(defn- remove-from-thread [c id]
+  (if (= (:id c) id)
+    nil
+    (let [replies (drop-id (:replies c) id)
+          pending (drop-id (:pending-replies c) id)
+          gone? (or (not= (count replies) (count (or (:replies c) [])))
+                    (not= (count pending) (count (or (:pending-replies c) []))))]
+      (cond-> (assoc c :replies replies :pending-replies pending)
+        gone? (update :reply-count #(max 0 (dec (or % 0))))))))
+
+(defn- remove-comment! [!st id]
+  (swap! !st
+         (fn [st]
+           (let [root? (or (some #(= (:id %) id) (:items st))
+                           (some #(= (:id %) id) (or (:pinned st) [])))
+                 touch (fn [xs]
+                         (if root?
+                           (drop-id xs id)
+                           (into [] (keep #(remove-from-thread % id)) xs)))]
+             (-> st
+                 (update :items touch)
+                 (update :pinned #(touch (or % [])))
+                 (update :comment-total #(max 0 (dec (or % 0))))))))
+  nil)
+
+(defn- edit-comment! [ctx !st c]
+  (text-dialog! ctx {:title "Edit"
+                     :initial (or (:content c) "")
+                     :send-label "Save"
+                     :success "Comment updated"
+                     :submit!
+                     (fn [content]
+                       (-> (api/update-comment! (:id c) {:content content
+                                                         :content-spans []})
+                           (.then (fn [updated]
+                                    (apply-edit! !st updated)
+                                    updated))))})
+  nil)
+
+(defn- delete-comment! [ctx !st c]
+  (confirm/show! ctx {:title "Delete this comment?"
+                      :confirm-label "Delete"
+                      :danger? true
+                      :on-confirm
+                      (fn []
+                        (-> (api/delete-comment! (:id c))
+                            (.then (fn [_]
+                                     (when (.-mounted ^m/BuildContext ctx)
+                                       (remove-comment! !st (:id c))
+                                       (toast/success! ctx "Comment deleted"))
+                                     nil))
+                            (.catchError (fn [e]
+                                           (when (.-mounted ^m/BuildContext ctx)
+                                             (toast/error! ctx e))
+                                           nil))))})
+  nil)
+
 (defn- load-more-replies! [ctx !st id]
   (let [st @!st
         gen (:gen st)
@@ -459,14 +573,19 @@
          _ (paged/load-more! ctx !st fetch)
          more! (fn [id] (load-more-replies! ctx !st id) nil)]
    :watch [open? !open
-           st !st]
+           st !st
+           _sess store/session]
    (let [write! (fn [pid]
                   (compose! ctx target-type target-id
                             :parent-id pid
                             :on-posted (fn [posted]
                                          (accept-posted! !st posted)
                                          (reset! !open true)))
-                  nil)]
+                  nil)
+         handlers {:on-reply write!
+                   :on-more more!
+                   :on-edit #(edit-comment! ctx !st %)
+                   :on-delete #(delete-comment! ctx !st %)}]
      (if-not open?
        (rail st #(reset! !open true) #(write! nil))
        (m/Expanded
@@ -478,7 +597,7 @@
           .crossAxisAlignment m.CrossAxisAlignment/stretch
           .children
           [(m/Expanded
-            .child (paged/strip !st fetch #(thread-card % write! more!)))
+            .child (paged/strip !st fetch #(thread-card % handlers)))
            (m/Padding
             .padding (m.EdgeInsets/only .left 4.0 .right 8.0 .top 12.0 .bottom 12.0)
             .child

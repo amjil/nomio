@@ -12,6 +12,7 @@
             [nomio.state.store :as store]
             [nomio.theme :as theme]
             [nomio.widgets.async :as asy]
+            [nomio.widgets.engage :as engage]
             [nomio.widgets.keyboard :as kb]
             [nomio.widgets.mongol :as mg]
             [nomio.widgets.sign-in :as sign-in]
@@ -33,11 +34,12 @@
   (cancel-timer-atom! !save-timer)
   nil)
 
-(defn- status-label [c]
-  (case (:status c)
+(defn- status-label [status]
+  (case status
     :published "Published"
+    :archived "Archived"
     :draft "Draft"
-    (str (:status c))))
+    (str status)))
 
 (defn- parse-tags [^m/TextEditingController ctrl]
   (->> (str/split (or (.-text ctrl) "") #"[,\s#]+")
@@ -168,15 +170,19 @@
   "Left-hand tools that need !state (undo/redo enable). Own :watch so the
    scaffold can mount mongol-block-editor without setState-during-build —
    same pattern as mgl-mail-app compose toolbar / mgl-notes-app editor-chrome."
-  [content !state !save-status title-ctrl tags-ctrl !id type* question-id]
+  [content !state !save-status title-ctrl tags-ctrl !id type* question-id !status]
   (f/widget
    :context ctx
    :get [m/Navigator]
    :watch [st !state
-           save-status !save-status]
+           save-status !save-status
+           status !status]
    (let [tone (:color (theme/tone (:type content)))
          can-undo? (seq (get-in st [:history :undo-stack]))
-         can-redo? (seq (get-in st [:history :redo-stack]))]
+         can-redo? (seq (get-in st [:history :redo-stack]))
+         id @!id
+         published? (= status :published)
+         archived? (= status :archived)]
      (m/Padding
       .padding (m.EdgeInsets/fromLTRB 16.0 16.0 8.0 16.0)
       .child
@@ -197,7 +203,7 @@
                                  nil)))
                     nil)})
         (ui/gap-v 18)
-        (ui/badge {:label (status-label content)
+        (ui/badge {:label (status-label status)
                    :color tone
                    :wash theme/accent-soft
                    :icon m.Icons/edit_outlined})
@@ -217,7 +223,24 @@
         (ui/action {:label "Publish"
                     :icon m.Icons/publish_rounded
                     :on-tap #(publish-flow! ctx navigator !id type* question-id
-                                            title-ctrl tags-ctrl !state !save-status)})])))))
+                                            title-ctrl tags-ctrl !state !save-status)})
+        (if (and id published?) (ui/gap-v 10) ui/nothing)
+        (if (and id published?)
+          (ui/ghost-action {:label "Unpublish"
+                            :icon m.Icons/visibility_off_outlined
+                            :on-tap #(engage/unpublish! ctx id
+                                                       (fn [_] (reset! !status :draft)))})
+          ui/nothing)
+        (if (and id (not archived?)) (ui/gap-v 10) ui/nothing)
+        (if (and id (not archived?))
+          (ui/ghost-action {:label "Archive"
+                            :icon m.Icons/inventory_2_outlined
+                            :tone theme/danger
+                            :on-tap #(engage/archive! ctx id
+                                                     (fn [_]
+                                                       (when (.-canPop navigator)
+                                                         (.pop navigator))))})
+          ui/nothing)])))))
 
 (defn- editor-screen [content]
   (f/widget
@@ -225,6 +248,7 @@
          !save-status (atom :idle)
          !save-timer (atom nil)
          !id (atom (:id content))
+         !status (atom (or (:status content) :draft))
          type* (:type content)
          question-id (:question-id content)
          question? (= :question type*)
@@ -272,7 +296,7 @@
         .crossAxisAlignment m.CrossAxisAlignment/stretch
         .children
         (cond-> [(editor-chrome content !state !save-status title-ctrl tags-ctrl
-                                !id type* question-id)]
+                                !id type* question-id !status)]
           (not answer?)
           (conj (meta-field title-ctrl title-focus "Title" m.Icons/title theme/ink))
 

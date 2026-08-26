@@ -8,6 +8,7 @@
             [nomio.theme :as theme]
             [nomio.widgets.async :as asy]
             [nomio.widgets.comments :as comments]
+            [nomio.widgets.engage :as engage]
             [nomio.widgets.keyboard :as kb]
             [nomio.widgets.mongol :as mg]
             [nomio.widgets.reader-frame :as frame]
@@ -97,9 +98,10 @@
           {:content ans
            :on-back #(.pop navigator)
            :actions
-           [(when (= (:id (store/current-user)) (:author-id ans))
-              {:icon m.Icons/edit_outlined
-               :on-tap #(store/push-named! (str "/content/" (:id ans) "/edit"))})]
+           (into [(when (= (:id (store/current-user)) (:author-id ans))
+                    {:icon m.Icons/edit_outlined
+                     :on-tap #(store/push-named! (str "/content/" (:id ans) "/edit"))})]
+                 (engage/owner-status-actions ctx ans))
            :extra (m/Column
                    .mainAxisSize m.MainAxisSize/min
                    .crossAxisAlignment m.CrossAxisAlignment/start

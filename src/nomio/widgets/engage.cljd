@@ -4,6 +4,7 @@
   (:require ["package:flutter/material.dart" :as m]
             [nomio.core.api :as api]
             [nomio.state.store :as store]
+            [nomio.widgets.confirm :as confirm]
             [nomio.widgets.toast :as toast]))
 
 (defn toggle-like! [ctx !c]
@@ -48,3 +49,54 @@
     {:icon (if bookmarked? m.Icons/bookmark_rounded m.Icons/bookmark_border)
      :active? bookmarked?
      :on-tap #(toggle-bookmark! ctx !c)}))
+
+(defn unpublish!
+  [ctx id on-ok]
+  (-> (api/unpublish! id)
+      (.then (fn [c]
+               (when (.-mounted ^m/BuildContext ctx)
+                 (toast/success! ctx "Unpublished")
+                 (when on-ok (on-ok c)))
+               nil))
+      (.catchError (fn [e]
+                     (when (.-mounted ^m/BuildContext ctx)
+                       (toast/error! ctx e))
+                     nil)))
+  nil)
+
+(defn archive!
+  [ctx id on-ok]
+  (confirm/show! ctx {:title "Archive this?"
+                      :confirm-label "Archive"
+                      :danger? true
+                      :on-confirm
+                      (fn []
+                        (-> (api/archive! id)
+                            (.then (fn [c]
+                                     (when (.-mounted ^m/BuildContext ctx)
+                                       (toast/success! ctx "Archived")
+                                       (when on-ok (on-ok c)))
+                                     nil))
+                            (.catchError (fn [e]
+                                           (when (.-mounted ^m/BuildContext ctx)
+                                             (toast/error! ctx e))
+                                           nil))))})
+  nil)
+
+(defn owner-status-actions
+  "Unpublish / archive icons for the author. Empty when the viewer does not own
+   `content`, or it is already archived."
+  [ctx content]
+  (let [id (:id content)
+        st (:status content)]
+    (if-not (and id (= (:id (store/current-user)) (:author-id content)))
+      []
+      (cond-> []
+        (= st :published)
+        (conj {:icon m.Icons/visibility_off_outlined
+               :on-tap #(unpublish! ctx id
+                                    (fn [_]
+                                      (store/replace-named! (str "/content/" id "/edit"))))})
+        (not= st :archived)
+        (conj {:icon m.Icons/inventory_2_outlined
+               :on-tap #(archive! ctx id (fn [_] (store/pop!)))})))))

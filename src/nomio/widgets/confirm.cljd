@@ -1,0 +1,47 @@
+(ns nomio.widgets.confirm
+  "A small yes/no dialog in the same vertical-script shell as compose."
+  (:require ["package:flutter/material.dart" :as m]
+            [components.dialog :as dialog]
+            [nomio.theme :as theme]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.ui :as ui]))
+
+(defn show!
+  "Ask before a destructive step. `on-confirm` runs after the dialog closes."
+  [ctx {:keys [title confirm-label danger? on-confirm]
+        :or {confirm-label "OK"}}]
+  (m/showDialog
+   .context ctx
+   .builder
+   (fn [dctx]
+     (dialog/vertical-custom-dialog
+      {:width-factor 0.42
+       :height-factor 0.48
+       :child
+       (m/Padding
+        .padding (m.EdgeInsets/all 18.0)
+        .child
+        (m/Row
+         .crossAxisAlignment m.CrossAxisAlignment/stretch
+         .children
+         [(m/Expanded .child (mg/title (or title "Are you sure?") 16.0))
+          (m/Padding
+           .padding (m.EdgeInsets/only .left 16.0)
+           .child
+           (m/Column
+            .mainAxisAlignment m.MainAxisAlignment/end
+            .children
+            [(ui/ghost-action
+              {:label "Cancel"
+               :on-tap (fn []
+                         (.pop (m/Navigator.of dctx))
+                         nil)})
+             (ui/gap-v 14)
+             (ui/action
+              {:label confirm-label
+               :tone (if danger? theme/danger theme/accent)
+               :on-tap (fn []
+                         (.pop (m/Navigator.of dctx))
+                         (when on-confirm (on-confirm))
+                         nil)})]))]))})))
+  nil)

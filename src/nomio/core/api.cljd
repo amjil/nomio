@@ -290,6 +290,17 @@
                     parent-id (assoc :parent-id parent-id)))
       (.then (fn [res] (:data res)))))
 
+(defn update-comment!
+  [id {:keys [content content-spans]}]
+  (-> (http/patch! (str "/comments/" id)
+                   (cond-> {:content content}
+                     (some? content-spans) (assoc :content-spans content-spans)))
+      (.then (fn [res] (:data res)))))
+
+(defn delete-comment! [id]
+  (-> (http/delete! (str "/comments/" id))
+      (.then (fn [res] (boolean (:ok res))))))
+
 (defn toggle-bookmark! [id]
   (-> (http/post! (str "/contents/" id "/bookmark/toggle"))
       (.then (fn [res] (boolean (:bookmarked res))))))

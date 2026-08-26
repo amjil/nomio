@@ -145,6 +145,13 @@
        (.pushNamed nav route)))
    nil))
 
+(defn replace-named!
+  "Swap the current route so Unpublish does not leave a published reader underneath."
+  [route]
+  (when-let [nav (navigator)]
+    (.pushReplacementNamed nav route))
+  nil)
+
 (defn pop! []
   (when-let [nav (navigator)]
     (when (.-canPop nav)

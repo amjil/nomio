@@ -41,11 +41,12 @@
             {:content content
              :on-back #(.pop navigator)
              :actions
-             [(when mine?
-                {:icon m.Icons/edit_outlined
-                 :on-tap #(store/push-named! (str "/content/" (:id content) "/edit"))})
-              (engage/like-action ctx !c)
-              (engage/bookmark-action ctx !c)]})
+             (into [(when mine?
+                      {:icon m.Icons/edit_outlined
+                       :on-tap #(store/push-named! (str "/content/" (:id content) "/edit"))})
+                    (engage/like-action ctx !c)
+                    (engage/bookmark-action ctx !c)]
+                   (engage/owner-status-actions ctx content))})
 
            (m/Expanded
             .flex 3

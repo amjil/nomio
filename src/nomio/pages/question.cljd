@@ -97,10 +97,11 @@
             {:content content
              :on-back #(.pop navigator)
              :actions
-             [(when mine?
-                {:icon m.Icons/edit_outlined
-                 :on-tap #(store/push-named! (str "/content/" (:id content) "/edit"))})
-              (engage/like-action ctx !q)]
+             (into [(when mine?
+                      {:icon m.Icons/edit_outlined
+                       :on-tap #(store/push-named! (str "/content/" (:id content) "/edit"))})
+                    (engage/like-action ctx !q)]
+                   (engage/owner-status-actions ctx content))
              :extra (ui/action {:label "Answer"
                                 :icon m.Icons/reply_rounded
                                 :tone theme/gold
