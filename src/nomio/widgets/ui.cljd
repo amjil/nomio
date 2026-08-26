@@ -262,7 +262,7 @@
     :or {tone theme/accent icon m.Icons/layers_outlined}}]
   (m/Column
    .mainAxisSize m.MainAxisSize/min
-   .crossAxisAlignment m.CrossAxisAlignment/start
+   .crossAxisAlignment m.CrossAxisAlignment/center
    .children
    [(m/Container
      .width 40.0
@@ -286,20 +286,20 @@
 ;; --- Async states ----------------------------------------------------------
 
 (defn input-panel
-  "The vertical text field's box — icon on the leading edge, field filling the
-   rest. Width is left unconstrained so MongolTextField can size itself."
+  "The vertical text field's box — icon on top, field filling the rest.
+   Width is left unconstrained so MongolTextField can size itself."
   [{:keys [icon margin]} child]
   (panel
    {:pad (m.EdgeInsets/symmetric .horizontal 10.0 .vertical 16.0)
     :radius theme/radius-lg
     :margin (or margin (m.EdgeInsets/symmetric .horizontal 4.0 .vertical 22.0))
     :color theme/surface}
-   (m/Row
-    .crossAxisAlignment m.CrossAxisAlignment/start
+   (m/Column
+    .crossAxisAlignment m.CrossAxisAlignment/center
     .children
-    [(if icon (top (m/Icon icon .size 18.0 .color theme/ink-faint)) nothing)
-     (if icon (gap-h 8) nothing)
-     child])))
+    [(if icon (m/Icon icon .size 18.0 .color theme/ink-faint) nothing)
+     (if icon (gap-v 8) nothing)
+     (m/Expanded .child child)])))
 
 (defn spinner []
   (m/Center

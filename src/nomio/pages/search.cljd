@@ -14,32 +14,44 @@
 
 (defonce ^:private !ime (atom {:external-keyboard-delegate nil}))
 
-(def ^:private debounce (dart:core/Duration. .milliseconds 250))
+;; Hot-reload alias: StatefulWidget watchers keep the previous build's
+;; schedule! closure, which still looks up this versioned getter.
+(defonce ^{:dart/name debounce$v11} debounce$v11
+  (dart:core/Duration. .milliseconds 250))
 
 (defn- cancel-timer-atom! [!t]
   (when-let [t @!t] (.cancel ^async/Timer t))
   nil)
 
+(defn- schedule-search! [!timer run! v]
+  (when-let [t @!timer] (.cancel ^async/Timer t))
+  (reset! !timer
+          (async/Timer. (dart:core/Duration. .milliseconds 250)
+                        #(run! v)))
+  nil)
+
 (defn- field-box [query ctrl focus schedule! clear!]
   (ui/input-panel
    {:icon m.Icons/search_rounded}
-   (m/Row
-    .crossAxisAlignment m.CrossAxisAlignment/start
+   (m/Column
+    .crossAxisAlignment m.CrossAxisAlignment/center
     .children
-    [(custom-tf/text-field
-      !ime
-      {:controller ctrl
-       :focus-node focus
-       :hint "Search"
-       :max-lines 1
-       :on-changed (fn [v] (schedule! (or v "")))
-       :style (m/TextStyle .color theme/ink .fontFamily theme/font-family)
-       :decoration (m/InputDecoration .border m/InputBorder.none)})
+    [(m/Expanded
+      .child
+      (custom-tf/text-field
+       !ime
+       {:controller ctrl
+        :focus-node focus
+        :hint "Search"
+        :max-lines 1
+        :on-changed (fn [v] (schedule! (or v "")))
+        :style (m/TextStyle .color theme/ink .fontFamily theme/font-family)
+        :decoration (m/InputDecoration .border m/InputBorder.none)}))
      (if (str/blank? query)
        ui/nothing
-       (ui/top (ui/icon-button {:icon m.Icons/close_rounded
-                                :on-tap clear!
-                                :size 30.0})))])))
+       (ui/icon-button {:icon m.Icons/close_rounded
+                        :on-tap clear!
+                        :size 30.0}))])))
 
 (defn- page-aside []
   (m/Padding
@@ -67,11 +79,16 @@
 (defn page []
   (f/widget
    :context ctx
-   :let [!query (atom "")
-         !results (paged/state)
-         !timer (atom nil)
+   :managed [!query (atom "")
+             !results (paged/state)
+             !timer (atom nil)
+             _ime-control (kb/install)
+             :dispose kb/restore-ime!
+             ctrl (m/TextEditingController.)
+             focus (m/FocusNode.)
+             _ !timer :dispose cancel-timer-atom!]
 
-         ;; Reading the query from the atom keeps this function identity stable
+   :let [;; Reading the query from the atom keeps this function identity stable
          ;; for the strip's scroll listener, and paged's generation counter is
          ;; what stops a slow reply to an earlier query from landing late.
          fetch (fn [opts] (api/search @!query opts))
@@ -83,20 +100,11 @@
                   (paged/reload! ctx !results fetch))
                 nil)
 
-         schedule! (fn [v]
-                     (cancel-timer-atom! !timer)
-                     (reset! !timer (async/Timer. debounce #(run! v)))
-                     nil)]
-
-   :managed [_ime-control (kb/install)
-             :dispose kb/restore-ime!
-             ctrl (m/TextEditingController.)
-             focus (m/FocusNode.)
-             _ !timer :dispose cancel-timer-atom!]
+         schedule! (fn [v] (schedule-search! !timer run! v))]
 
    ;; IME writes the controller directly and skips MongolTextField.onChanged.
    :bg-watcher ([^m/TextEditingValue {v .-text} ctrl]
-                (schedule! (or v "")))
+                (schedule-search! !timer run! (or v "")))
    :watch [query !query]
    :let [clear! (fn [] (.clear ctrl) (run! "") nil)
          fields (field-and-results query ctrl focus schedule! clear! !results fetch)]
