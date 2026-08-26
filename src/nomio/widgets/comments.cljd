@@ -12,9 +12,9 @@
             [nomio.core.api :as api]
             [nomio.state.store :as store]
             [nomio.theme :as theme]
-            [nomio.widgets.async :as asy]
             [nomio.widgets.keyboard :as kb]
             [nomio.widgets.mongol :as mg]
+            [nomio.widgets.paged :as paged]
             [nomio.widgets.reader-frame :as frame]
             [nomio.widgets.toast :as toast]
             [nomio.widgets.ui :as ui]))
@@ -52,41 +52,6 @@
       (ui/gap-v 6)
       (mg/text reply-label {:size 12.5 :color theme/accent})]))))
 
-(defn- by-id-map [comments]
-  (into {} (map (juxt :id identity) comments)))
-
-(defn- thread-root-id
-  "Walk parent pointers until a comment with no parent. A missing parent or
-   a cycle makes this comment a root so it still paints instead of vanishing."
-  [c by-id]
-  (loop [cur c seen #{}]
-    (let [id (:id cur)]
-      (cond
-        (contains? seen id) nil
-        (nil? (:parent-id cur)) id
-        :else
-        (if-let [parent (get by-id (:parent-id cur))]
-          (recur parent (conj seen id))
-          nil)))))
-
-(defn- two-level-by-parent
-  "Roots stay roots. A reply-to-a-reply is rehung off the thread root so
-   it still shows — as a sibling of the first reply, never a third indent.
-   The original parent is kept on :reply-to so the UI can paint @author.
-   Orphans (parent not in this list) stay roots."
-  [comments]
-  (let [by-id (by-id-map comments)]
-    (->> comments
-         (map (fn [c]
-                (if-let [pid (:parent-id c)]
-                  (let [rid (thread-root-id c by-id)
-                        parent (get by-id pid)
-                        mention? (and rid parent (not= pid rid))]
-                    (cond-> (assoc c :parent-id rid)
-                      mention? (assoc :reply-to parent)))
-                  c)))
-         (group-by :parent-id))))
-
 (defn- reply-to-mark
   "Grey @author of the comment this one actually replied to. Only painted
    when that parent is not the thread root (a second-level-to-second-level
@@ -104,6 +69,54 @@
           (ui/gap-h 10)])))
     ui/nothing))
 
+(defn- thread-step [child]
+  (m/Padding
+   .padding (m.EdgeInsets/only .top 32.0 .left 20.0)
+   .child
+   (m/Container
+    .padding (m.EdgeInsets/only .left 12.0)
+    .decoration (m/BoxDecoration
+                 .border (m/Border .left (m/BorderSide
+                                          .color theme/divider-strong
+                                          .width 1.0)))
+    .child child)))
+
+(def ^:private reply-page-size 20)
+
+(defn- more-replies-control [c on-more]
+  (let [left (- (or (:reply-count c) 0) (count (or (:replies c) [])))
+        tap #(on-more (:id c))]
+    (cond
+      (= :paging (:replies-status c))
+      (m/SizedBox
+       .width 28.0 .height 28.0
+       .child (m/CircularProgressIndicator
+               .strokeWidth 1.8 .color theme/accent))
+
+      (= :error (:replies-status c))
+      (ui/ghost-action {:label "Retry"
+                        :icon m.Icons/refresh_rounded
+                        :tone theme/danger
+                        :on-tap tap})
+
+      :else
+      (ui/tappable
+       tap theme/radius-sm
+       (m/Padding
+        .padding (m.EdgeInsets/symmetric .horizontal 6.0 .vertical 8.0)
+        .child
+        (m/Column
+         .mainAxisSize m.MainAxisSize/min
+         .crossAxisAlignment m.CrossAxisAlignment/center
+         .children
+         [(ui/top (m/Icon m.Icons/keyboard_arrow_right_rounded
+                          .size 15.0 .color theme/accent))
+          (ui/gap-v 6)
+          (mg/text (str left)
+                   {:size 12.5 :color theme/accent :weight m.FontWeight/w600})
+          (ui/gap-v 6)
+          (mg/text "More" {:size 12.5 :color theme/accent})]))))))
+
 (defn- comment-node
   "One comment and, at depth 0 only, its replies. A Row, not a Column: the
    byline, body, reply control and nested replies step left to right so
@@ -111,9 +124,12 @@
    Depth is capped at two (root + reply); replies do not nest further, but
    a second-level comment can still be replied to — the new one hangs next
    to its siblings with a grey @author pointing at the original."
-  [c by-parent on-reply depth]
+  [c on-reply on-more depth]
   (let [leaf? (>= depth 1)
-        kids (when-not leaf? (or (get by-parent (:id c)) []))]
+        kids (when-not leaf? (or (:replies c) []))
+        more? (and (not leaf?)
+                   on-more
+                   (pos? (- (or (:reply-count c) 0) (count kids))))]
     (m/Row
      .crossAxisAlignment m.CrossAxisAlignment/start
      .mainAxisSize m.MainAxisSize/min
@@ -128,40 +144,19 @@
       ;; Replies hang off the right of the root. Top indent is the
       ;; nested step in vertical script (the analogue of a left gutter
       ;; in horizontal text); the rule marks the thread.
-      (map (fn [k]
-             (m/Padding
-              .padding (m.EdgeInsets/only .top 32.0 .left 20.0)
-              .child
-              (m/Container
-               .padding (m.EdgeInsets/only .left 12.0)
-               .decoration (m/BoxDecoration
-                            .border (m/Border .left (m/BorderSide
-                                                     .color theme/divider-strong
-                                                     .width 1.0)))
-               .child (comment-node k by-parent on-reply (inc depth)))))
-           kids)))))
+      (cond-> (map (fn [k]
+                     (thread-step (comment-node k on-reply nil (inc depth))))
+                   kids)
+        more? (concat [(thread-step (more-replies-control c on-more))]))))))
 
-(defn tree
-  ([comments] (tree comments nil))
-  ([comments on-reply]
-   (let [by-parent (two-level-by-parent comments)
-         roots (or (get by-parent nil) [])]
-     (if (empty? roots)
-       (ui/state-view {:icon m.Icons/mode_comment_outlined
-                       :title "No comments yet"})
-       (m/ListView
-        .scrollDirection m.Axis/horizontal
-        .padding (m.EdgeInsets/all 12.0)
-        .children
-        (mapv (fn [c]
-                (ui/panel
-                 ;; No locked width: MongolText wraps to the next column
-                 ;; when it runs out of height, and the card grows with it.
-                 {:margin (m.EdgeInsets/only .right 14.0)
-                  :pad 16.0
-                  :radius theme/radius-md}
-                 (comment-node c by-parent on-reply 0)))
-              roots))))))
+(defn- thread-card [c on-reply on-more]
+  (ui/panel
+   ;; No locked width: MongolText wraps to the next column when it runs
+   ;; out of height, and the card grows with it.
+   {:margin (m.EdgeInsets/symmetric .horizontal 8.0 .vertical 14.0)
+    :pad 16.0
+    :radius theme/radius-md}
+   (comment-node c on-reply on-more 0)))
 
 (defn- close-dialog! [dctx]
   (kb/dismiss!)
@@ -290,8 +285,8 @@
 
 (defn- count-mark [st]
   (cond
-    (= :ok (:status st))
-    (mg/text (str (count (:data st)))
+    (some? (:comment-total st))
+    (mg/text (str (:comment-total st))
              {:size 13.0 :color theme/ink-muted :weight m.FontWeight/w600})
     (= :error (:status st))
     (m/Icon m.Icons/error_outline_rounded .size 14.0 .color theme/danger)
@@ -332,17 +327,65 @@
                        :active? true
                        :on-tap on-write})]))))
 
+(defn- patch-thread! [!st id f]
+  (swap! !st update :items
+         (fn [items]
+           (mapv (fn [c] (if (= (:id c) id) (f c) c)) items)))
+  nil)
+
+(defn- load-more-replies! [ctx !st id]
+  (let [st @!st
+        gen (:gen st)
+        root (some #(when (= (:id %) id) %) (:items st))]
+    (when (and root
+               (.-mounted ^m/BuildContext ctx)
+               (not= :paging (:replies-status root)))
+      (patch-thread! !st id #(assoc % :replies-status :paging))
+      (-> (api/comment-replies id {:limit reply-page-size
+                                   :offset (count (or (:replies root) []))})
+          (.then (fn [page]
+                   (when (and (.-mounted ^m/BuildContext ctx)
+                              (= gen (:gen @!st)))
+                     (patch-thread! !st id
+                                    (fn [c]
+                                      (let [seen (into #{} (map :id) (:replies c))
+                                            fresh (into [] (remove #(contains? seen (:id %))
+                                                                   (:items page)))
+                                            loaded (into (vec (or (:replies c) [])) fresh)
+                                            n (count loaded)
+                                            total (if (false? (:has-more page))
+                                                    n
+                                                    (or (:reply-total page)
+                                                        (:reply-count c)
+                                                        n))]
+                                        (assoc c
+                                               :replies loaded
+                                               :reply-count total
+                                               :replies-status :ok)))))
+                   nil))
+          (.catchError (fn [_]
+                         (when (and (.-mounted ^m/BuildContext ctx)
+                                    (= gen (:gen @!st)))
+                           (patch-thread! !st id #(assoc % :replies-status :error)))
+                         nil)))))
+  nil)
+
 (defn column
   "Trailing comments column. Collapsed to a count until opened; writing
-   always goes through `compose!` so the paper keeps its width."
-  [target-type target-id !comments]
+   always goes through `compose!` so the paper keeps its width. Roots page
+   through paged/strip; each card carries a preview of that thread's replies
+   and can ask for the rest."
+  [target-type target-id]
   (f/widget
    :context ctx
    :let [!open (atom false)
-         fetch (fn [] (api/comments target-type target-id))
-         reload! (fn [] (asy/load! ctx !comments (fetch)) nil)]
+         !st (paged/state)
+         fetch (fn [opts] (api/comments target-type target-id opts))
+         _ (paged/load-more! ctx !st fetch)
+         reload! (fn [] (paged/reload! ctx !st fetch) nil)
+         more! (fn [id] (load-more-replies! ctx !st id) nil)]
    :watch [open? !open
-           st !comments]
+           st !st]
    (let [write! (fn [pid]
                   (compose! ctx target-type target-id
                             :parent-id pid
@@ -361,9 +404,7 @@
           .crossAxisAlignment m.CrossAxisAlignment/stretch
           .children
           [(m/Expanded
-            .child (asy/view !comments
-                             #(tree % write!)
-                             :retry reload!))
+            .child (paged/strip !st fetch #(thread-card % write! more!)))
            (m/Padding
             .padding (m.EdgeInsets/only .left 4.0 .right 8.0 .top 12.0 .bottom 12.0)
             .child

@@ -20,7 +20,6 @@
    :managed [_ime-control (kb/install)
              :dispose kb/restore-ime!]
    :let [!c (atom c)
-         !comments (asy/load! ctx (api/comments "article" (:id c)))
          ;; Paper is built from the fetched document, not the watched atom, so
          ;; like/bookmark cannot reconstruct the ListView.
          paper (nreader/widget (:document c)
@@ -52,7 +51,7 @@
             .flex 3
             .child (frame/paper paper :title (:title c)))
 
-           (comments/column "article" (:id content) !comments)]))))))))
+           (comments/column "article" (:id content))]))))))))
 
 (defn screen [slug]
   (f/widget

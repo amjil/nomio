@@ -80,7 +80,6 @@
    :managed [_ime-control (kb/install)
              :dispose kb/restore-ime!]
    :let [!a (atom a)
-         !comments (asy/load! ctx (api/comments "answer" (:id a)))
          paper (nreader/widget (:document a))]
    :watch [ans !a]
    (m/Scaffold
@@ -113,7 +112,7 @@
           .flex 3
           .child (frame/paper paper :title (:title a)))
 
-         (comments/column "answer" (:id ans) !comments)])))))))
+         (comments/column "answer" (:id ans))])))))))
 
 (defn- fetch
   "An answer plus its parent question. A missing question still renders the

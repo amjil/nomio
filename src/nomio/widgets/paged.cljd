@@ -56,13 +56,15 @@
   (let [items (:items page)
         seen (into #{} (map :id) (:items st))
         fresh (into [] (remove #(contains? seen (:id %))) items)]
-    (assoc st
-           :status :ok
-           :error nil
-           :failed nil
-           :items (into (:items st) fresh)
-           :offset (+ (:offset st) (count items))
-           :done? (ended? page fresh (count items)))))
+    (cond-> (assoc st
+                   :status :ok
+                   :error nil
+                   :failed nil
+                   :items (into (:items st) fresh)
+                   :offset (+ (:offset st) (count items))
+                   :done? (ended? page fresh (count items)))
+      (contains? page :comment-total)
+      (assoc :comment-total (:comment-total page)))))
 
 (defn- current?
   "A reply is worth keeping only if its generation is still on screen — and only

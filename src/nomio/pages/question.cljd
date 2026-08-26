@@ -79,7 +79,6 @@
          answers-fetch (fn [opts] (api/answers (:id q) opts))
          !answers (paged/state)
          _ (paged/load-more! ctx !answers answers-fetch)
-         !comments (asy/load! ctx (api/comments "question" (:id q)))
          paper (nreader/widget (:document q))]
    :watch [content !q]
    (let [mine? (= (:id (store/current-user)) (:author-id content))]
@@ -113,7 +112,7 @@
 
            (answers-column !answers answers-fetch)
 
-           (comments/column "question" (:id content) !comments)]))))))))
+           (comments/column "question" (:id content))]))))))))
 
 (defn screen [slug]
   (f/widget

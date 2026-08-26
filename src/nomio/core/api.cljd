@@ -163,11 +163,26 @@
    (-> (http/get! (str "/questions/" qid "/answers") (or opts {}))
        (.then data-page))))
 
-(defn comments [tt tid]
-  (-> (http/get! "/comments"
-                 {:target-type (if (keyword? tt) (name tt) (str tt))
-                  :target-id tid})
-      (.then (fn [res] (or (:data res) [])))))
+(defn comments
+  ([tt tid] (comments tt tid nil))
+  ([tt tid opts]
+   (-> (http/get! "/comments"
+                  (merge {:target-type (if (keyword? tt) (name tt) (str tt))
+                          :target-id tid}
+                         (or opts {})))
+       (.then (fn [res]
+                (cond-> (page-of (or (:data res) []) res)
+                  (contains? (:meta res) :comment-total)
+                  (assoc :comment-total (get-in res [:meta :comment-total]))))))))
+
+(defn comment-replies
+  ([id] (comment-replies id nil))
+  ([id opts]
+   (-> (http/get! "/comments" (merge {:root-id id} (or opts {})))
+       (.then (fn [res]
+                (cond-> (page-of (or (:data res) []) res)
+                  (contains? (:meta res) :total)
+                  (assoc :reply-total (get-in res [:meta :total]))))))))
 
 (defn search
   ([q] (search q nil))
