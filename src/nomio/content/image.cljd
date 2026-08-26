@@ -87,7 +87,7 @@
 (defn pick-path!
   "Open the system image picker. Resolves to a filesystem path, or nil if cancelled."
   []
-  (-> (fp/FilePicker.platform.pickFiles .type fp/FileType.image .allowMultiple false)
+  (-> (fp/FilePicker.pickFiles .type fp/FileType.image .allowMultiple false)
       (.then first-path)))
 
 (defn pick-into-block!
