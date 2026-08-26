@@ -60,7 +60,7 @@
          .child
          (m/Column
           .mainAxisSize m.MainAxisSize/min
-          .crossAxisAlignment m.CrossAxisAlignment/start
+          .crossAxisAlignment m.CrossAxisAlignment/center
           .children
           [(ui/icon-button {:icon m.Icons/arrow_back_rounded
                             :on-tap #(store/pop!)})

@@ -28,7 +28,7 @@
      .width 34.0
      .child
      (m/Column
-      .crossAxisAlignment m.CrossAxisAlignment/start
+      .crossAxisAlignment m.CrossAxisAlignment/center
       .children
       (cond-> []
         (seq name)
@@ -37,18 +37,18 @@
               (m/Flexible .child (mg/muted name)))
 
         likes
-        (conj (ui/gap-v 12)
+        (conj (ui/gap-v 20)
               (ui/stat m.Icons/favorite_rounded likes theme/danger))
 
         votes
-        (conj (ui/gap-v 12)
+        (conj (ui/gap-v 20)
               (ui/stat m.Icons/arrow_upward_rounded votes theme/jade)))))))
 
 (defn card [c]
   (let [{:keys [color wash icon label]} (theme/tone (:type c))
         excerpt (card-excerpt c)]
     (ui/panel
-     {:width 278.0
+     {:width 200.0
       :margin (m.EdgeInsets/symmetric .horizontal 8.0 .vertical 14.0)
       :pad 18.0
       :radius theme/radius-lg
@@ -60,22 +60,22 @@
      (m/Row
       .crossAxisAlignment m.CrossAxisAlignment/stretch
       .children
-      [(ui/spine color)
-       (ui/gap-h 15)
-       (ui/top (ui/badge {:label label :color color :wash wash :icon icon}))
+      [(m/Column
+        .crossAxisAlignment m.CrossAxisAlignment/center
+        .children
+        [(ui/badge {:label label :color color :wash wash :icon icon})
+         (ui/gap-v 8)
+         (m/Expanded .child (ui/spine color))])
        (ui/gap-h 13)
-       (m/Expanded
-        .flex 3
-        .child (mg/text (or (:title c) "Untitled")
-                        {:size 18.0 :weight m.FontWeight/w600
-                         :height 1.15 :max-lines 4}))
+       (mg/text (or (:title c) "Untitled")
+                {:size 18.0 :weight m.FontWeight/w600
+                 :height 1.15 :max-lines 1})
+
        (ui/gap-h 8)
        (if (empty? excerpt)
          ui/nothing
-         (m/Expanded
-          .flex 2
-          .child (mg/text excerpt {:size 13.5 :color theme/ink-faint
-                                   :height 1.3 :max-lines 3})))
+         (mg/text excerpt {:size 13.5 :color theme/ink-faint
+                           :height 1.3 :max-lines 3}))
        (ui/gap-h 12)
        (meta-column c)]))))
 

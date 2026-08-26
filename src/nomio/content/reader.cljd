@@ -9,7 +9,7 @@
 
 (defn- block-column [block plugins cfg on-link !state]
   (m/Container
-   .width 280.0
+   .constraints (m/BoxConstraints .maxWidth 280.0)
    .margin (m.EdgeInsets/only .right 12.0)
    .child (reader/block-reader-view block plugins cfg on-link !state)))
 

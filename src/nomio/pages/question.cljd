@@ -92,7 +92,8 @@
 
            (m/Expanded
             .flex 3
-            .child (frame/paper (nreader/widget (:document content))))
+            .child (frame/paper (nreader/widget (:document content))
+                                :title (:title content)))
 
            (m/Expanded
             .flex 2

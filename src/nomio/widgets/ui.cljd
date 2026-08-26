@@ -228,6 +228,7 @@
   [icon value color]
   (m/Column
    .mainAxisSize m.MainAxisSize/min
+   .crossAxisAlignment m.CrossAxisAlignment/center
    .children
    [(m/Icon icon .size 13.0 .color color)
     (gap-v 5)
