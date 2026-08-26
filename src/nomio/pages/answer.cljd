@@ -14,22 +14,23 @@
             [nomio.widgets.toast :as toast]
             [nomio.widgets.ui :as ui]))
 
-(defn- cast-vote! [ctx !a a dir]
+(defn- cast-vote! [ctx !a dir]
   (store/require-auth!
    (fn []
-     (-> (if (= (:my-vote a) dir)
-           (api/unvote! (:id a))
-           (api/vote! (:id a) dir))
-         (.then (fn [res]
-                  (when (.-mounted ^m/BuildContext ctx)
-                    (swap! !a assoc
-                           :my-vote (:my-vote res)
-                           :vote-score (:vote-score res)))
-                  nil))
-         (.catchError (fn [e]
-                        (when (.-mounted ^m/BuildContext ctx)
-                          (toast/error! ctx e))
-                        nil)))))
+     (let [a @!a]
+       (-> (if (= (:my-vote a) dir)
+             (api/unvote! (:id a))
+             (api/vote! (:id a) dir))
+           (.then (fn [res]
+                    (when (.-mounted ^m/BuildContext ctx)
+                      (swap! !a assoc
+                             :my-vote (:my-vote res)
+                             :vote-score (:vote-score res)))
+                    nil))
+           (.catchError (fn [e]
+                          (when (.-mounted ^m/BuildContext ctx)
+                            (toast/error! ctx e))
+                          nil))))))
   nil)
 
 (defn- vote-box [a !a ctx]
@@ -46,14 +47,14 @@
       [(ui/icon-button {:icon m.Icons/keyboard_arrow_up_rounded
                         :size 32.0
                         :active? (= mine 1)
-                        :on-tap #(cast-vote! ctx !a a 1)})
+                        :on-tap #(cast-vote! ctx !a 1)})
        (ui/gap-v 8)
        (mg/text (str score) {:size 15.0 :weight m.FontWeight/w700})
        (ui/gap-v 8)
        (ui/icon-button {:icon m.Icons/keyboard_arrow_down_rounded
                         :size 32.0
                         :active? (= mine -1)
-                        :on-tap #(cast-vote! ctx !a a -1)})]))))
+                        :on-tap #(cast-vote! ctx !a -1)})]))))
 
 (defn- parent-link [q]
   (if-not q
@@ -79,7 +80,8 @@
    :managed [_ime-control (kb/install)
              :dispose kb/restore-ime!]
    :let [!a (atom a)
-         !comments (asy/load! ctx (api/comments "answer" (:id a)))]
+         !comments (asy/load! ctx (api/comments "answer" (:id a)))
+         paper (nreader/widget (:document a))]
    :watch [ans !a]
    (m/Scaffold
     .backgroundColor theme/bg
@@ -109,8 +111,7 @@
 
          (m/Expanded
           .flex 3
-          .child (frame/paper (nreader/widget (:document ans))
-                              :title (:title ans)))
+          .child (frame/paper paper :title (:title a)))
 
          (comments/column "answer" (:id ans) !comments)])))))))
 

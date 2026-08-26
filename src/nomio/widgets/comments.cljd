@@ -56,17 +56,24 @@
   (into {} (map (juxt :id identity) comments)))
 
 (defn- thread-root-id
-  "Walk parent pointers until a comment with no parent."
+  "Walk parent pointers until a comment with no parent. A missing parent or
+   a cycle makes this comment a root so it still paints instead of vanishing."
   [c by-id]
-  (loop [cur c]
-    (if-let [parent (get by-id (:parent-id cur))]
-      (recur parent)
-      (:id cur))))
+  (loop [cur c seen #{}]
+    (let [id (:id cur)]
+      (cond
+        (contains? seen id) nil
+        (nil? (:parent-id cur)) id
+        :else
+        (if-let [parent (get by-id (:parent-id cur))]
+          (recur parent (conj seen id))
+          nil)))))
 
 (defn- two-level-by-parent
   "Roots stay roots. A reply-to-a-reply is rehung off the thread root so
    it still shows — as a sibling of the first reply, never a third indent.
-   The original parent is kept on :reply-to so the UI can paint @author."
+   The original parent is kept on :reply-to so the UI can paint @author.
+   Orphans (parent not in this list) stay roots."
   [comments]
   (let [by-id (by-id-map comments)]
     (->> comments
@@ -74,7 +81,7 @@
                 (if-let [pid (:parent-id c)]
                   (let [rid (thread-root-id c by-id)
                         parent (get by-id pid)
-                        mention? (and parent (not= pid rid))]
+                        mention? (and rid parent (not= pid rid))]
                     (cond-> (assoc c :parent-id rid)
                       mention? (assoc :reply-to parent)))
                   c)))
@@ -162,23 +169,32 @@
     (.pop (m/Navigator.of dctx)))
   nil)
 
-(defn- send-plain! [ctx dctx ctrl target-type target-id parent-id on-posted]
+(defn- send-plain! [ctx dctx ctrl target-type target-id parent-id on-posted !busy]
   (let [content (str/trim (or (.-text ^m/TextEditingController ctrl) ""))]
-    (if (str/blank? content)
+    (cond
+      (str/blank? content)
       (toast/info! ctx "Write something first")
-      (-> (api/create-comment!
-           (cond-> {:target-type target-type
-                    :target-id target-id
-                    :content content}
-             parent-id (assoc :parent-id parent-id)))
-          (.then (fn [_]
-                   (close-dialog! dctx)
-                   (when on-posted (on-posted))
-                   (toast/success! ctx "Comment posted")
-                   nil))
-          (.catchError (fn [e]
-                         (toast/error! ctx e)
-                         nil)))))
+
+      @!busy
+      nil
+
+      :else
+      (do
+        (reset! !busy true)
+        (-> (api/create-comment!
+             (cond-> {:target-type target-type
+                      :target-id target-id
+                      :content content}
+               parent-id (assoc :parent-id parent-id)))
+            (.then (fn [_]
+                     (close-dialog! dctx)
+                     (when on-posted (on-posted))
+                     (toast/success! ctx "Comment posted")
+                     nil))
+            (.catchError (fn [e]
+                           (reset! !busy false)
+                           (toast/error! ctx e)
+                           nil))))))
   nil)
 
 (defn- field-box [ctrl focus !ime]
@@ -216,29 +232,31 @@
                                .color (if accent? theme/accent theme/ink-muted)
                                .fontWeight (if accent? m.FontWeight/w600 m.FontWeight/w400)))))
 
-(defn- compose-body [dctx ctrl focus !ime parent-id on-send]
-  (m/Padding
-   .padding (m.EdgeInsets/all 18.0)
-   .child
-   (m/Row
-    .crossAxisAlignment m.CrossAxisAlignment/stretch
-    .children
-    [(m/Container
-      .alignment m.Alignment/topCenter
-      .padding (m.EdgeInsets/only .right 16.0)
-      .decoration (m/BoxDecoration
-                   .border (m/Border .right (m/BorderSide .color theme/divider .width 1.0)))
-      .child (mg/title (if parent-id reply-label "Comment") 16.0))
-     (m/Expanded .child (field-box ctrl focus !ime))
-     (m/Padding
-      .padding (m.EdgeInsets/only .left 16.0)
-      .child
-      (m/Column
-       .mainAxisAlignment m.MainAxisAlignment/end
-       .children
-       [(dialog-action "Cancel" #(close-dialog! dctx) false)
-        (ui/gap-v 16)
-        (dialog-action "Send" on-send true)]))])))
+(defn- compose-body [dctx ctrl focus !ime parent-id on-send !busy]
+  (f/widget
+   :watch [busy? !busy]
+   (m/Padding
+    .padding (m.EdgeInsets/all 18.0)
+    .child
+    (m/Row
+     .crossAxisAlignment m.CrossAxisAlignment/stretch
+     .children
+     [(m/Container
+       .alignment m.Alignment/topCenter
+       .padding (m.EdgeInsets/only .right 16.0)
+       .decoration (m/BoxDecoration
+                    .border (m/Border .right (m/BorderSide .color theme/divider .width 1.0)))
+       .child (mg/title (if parent-id reply-label "Comment") 16.0))
+      (m/Expanded .child (field-box ctrl focus !ime))
+      (m/Padding
+       .padding (m.EdgeInsets/only .left 16.0)
+       .child
+       (m/Column
+        .mainAxisAlignment m.MainAxisAlignment/end
+        .children
+        [(dialog-action "Cancel" #(close-dialog! dctx) false)
+         (ui/gap-v 16)
+         (dialog-action "Send" (when-not busy? on-send) true)]))]))))
 
 (defn- compose-dialog! [ctx target-type target-id parent-id on-posted]
   (m/showDialog
@@ -249,15 +267,16 @@
       :managed [ctrl (m/TextEditingController.)
                 focus (m/FocusNode.)]
       :let [!ime (atom {:external-keyboard-delegate nil})
+            !busy (atom false)
             send! #(send-plain! ctx dctx ctrl target-type
-                                target-id parent-id on-posted)]
+                                target-id parent-id on-posted !busy)]
       ;; `:child` so kb/wrap lives *inside* the sized dialog: mobile VK
       ;; sits on the dialog, desktop candidates overlay it — same idea as
       ;; mail-app wrapping vertical-custom-dialog with ime-global-wrapper.
       (dialog/vertical-custom-dialog
        {:width-factor 0.72
         :height-factor 0.72
-        :child (kb/wrap (compose-body dctx ctrl focus !ime parent-id send!)
+        :child (kb/wrap (compose-body dctx ctrl focus !ime parent-id send! !busy)
                         "comment-dialog-ime")}))))
   nil)
 

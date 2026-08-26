@@ -194,20 +194,19 @@
 
 (defn profile [username]
   (-> (http/get! (str "/users/" username))
-      (.then (fn [res]
-               {:user (:user res)
-                :articles (mapv normalize-content (or (:articles res) []))
-                :questions (mapv normalize-content (or (:questions res) []))
-                :answers (mapv normalize-content (or (:answers res) []))
-                :drafts (mapv normalize-content (or (:drafts res) []))}))))
+      (.then (fn [res] {:user (:user res)}))))
 
-(defn mine []
-  (-> (http/get! "/me/contents")
-      (.then data-list)))
+(defn mine
+  ([] (mine nil))
+  ([opts]
+   (-> (http/get! "/me/contents" (or opts {}))
+       (.then data-page))))
 
-(defn following-feed []
-  (-> (http/get! "/me/feed")
-      (.then data-list)))
+(defn following-feed
+  ([] (following-feed nil))
+  ([opts]
+   (-> (http/get! "/me/feed" (or opts {}))
+       (.then data-page))))
 
 (defn create-content!
   [{:keys [type* title document tags question-id]}]
@@ -291,11 +290,13 @@
   (-> (http/delete! (str "/users/" user-id "/follow"))
       (.then identity)))
 
-(defn notifications []
-  (-> (http/get! "/notifications")
-      (.then (fn [res]
-               {:items (or (:data res) [])
-                :unread-count (or (:unread-count res) 0)}))))
+(defn notifications
+  ([] (notifications nil))
+  ([opts]
+   (-> (http/get! "/notifications" (or opts {}))
+       (.then (fn [res]
+                (-> (page-of (or (:data res) []) res)
+                    (assoc :unread-count (or (:unread-count res) 0))))))))
 
 (defn mark-notification-read! [id]
   (-> (http/post! (str "/notifications/" id "/read"))

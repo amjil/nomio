@@ -9,10 +9,12 @@
             [nomio.content.editor :as neditor]
             [nomio.content.reader :as nreader]
             [nomio.core.api :as api]
+            [nomio.state.store :as store]
             [nomio.theme :as theme]
             [nomio.widgets.async :as asy]
             [nomio.widgets.keyboard :as kb]
             [nomio.widgets.mongol :as mg]
+            [nomio.widgets.sign-in :as sign-in]
             [nomio.widgets.toast :as toast]
             [nomio.widgets.ui :as ui]
             [rich-editor.components.text-field :as custom-tf]))
@@ -42,38 +44,64 @@
        (remove str/blank?)
        vec))
 
-(defn- save!
-  "Resolves true when the draft reached the server."
-  [id ^m/TextEditingController title-ctrl tags-ctrl !state !save-status]
-  (reset! !save-status :saving)
-  (-> (api/save-draft!
-       id
-       {:title (.-text title-ctrl)
-        :document @!state
-        :tags (parse-tags tags-ctrl)})
-      (.then (fn [_]
-               (reset! !save-status :saved)
-               true))
-      (.catchError (fn [e]
-                     (reset! !save-status :error)
-                     (dart:core/print (str "autosave failed: " e))
-                     false))))
+(defn- worth-saving? [type* title-ctrl tags-ctrl !state]
+  (or (seq (str/trim (doc/plain-text @!state)))
+      (and (not= type* :answer)
+           (or (seq (str/trim (or (.-text title-ctrl) "")))
+               (seq (parse-tags tags-ctrl))))))
 
-(defn- publish-flow! [ctx navigator id ^m/TextEditingController title-ctrl tags-ctrl !state]
-  (-> (api/save-draft!
-       id
-       {:title (.-text title-ctrl)
-        :document @!state
-        :tags (parse-tags tags-ctrl)})
-      (.then (fn [_] (api/publish! id)))
+(defn- persist!
+  "Create on first save, patch afterwards. Empty new drafts skip the network
+   so tapping Write does not leave a blank document on the server."
+  [!id type* question-id ^m/TextEditingController title-ctrl tags-ctrl !state !save-status]
+  (let [id @!id]
+    (if (and (nil? id) (not (worth-saving? type* title-ctrl tags-ctrl !state)))
+      (async/Future.value true)
+      (do
+        (reset! !save-status :saving)
+        (let [body {:title (.-text title-ctrl)
+                    :document @!state
+                    :tags (parse-tags tags-ctrl)}]
+          (if id
+            (-> (api/save-draft! id body)
+                (.then (fn [_]
+                         (reset! !save-status :saved)
+                         true))
+                (.catchError (fn [e]
+                               (reset! !save-status :error)
+                               (dart:core/print (str "autosave failed: " e))
+                               false)))
+            (-> (api/create-content!
+                 (cond-> (assoc body :type* type*)
+                   question-id (assoc :question-id question-id)))
+                (.then (fn [c]
+                         (reset! !id (:id c))
+                         (reset! !save-status :saved)
+                         true))
+                (.catchError (fn [e]
+                               (reset! !save-status :error)
+                               (dart:core/print (str "autosave failed: " e))
+                               false)))))))))
+
+(defn- published-path [c]
+  (case (:type c)
+    :question (str "/questions/" (or (:slug c) (:id c)))
+    :answer (str "/answers/" (:id c))
+    (str "/articles/" (or (:slug c) (:id c)))))
+
+(defn- publish-flow! [ctx navigator !id type* question-id title-ctrl tags-ctrl !state !save-status]
+  (-> (persist! !id type* question-id title-ctrl tags-ctrl !state !save-status)
+      (.then (fn [saved?]
+               (if-not saved?
+                 (throw (Exception. "save failed"))
+                 (if-let [id @!id]
+                   (api/publish! id)
+                   (throw (Exception. "Write something first"))))))
       (.then (fn [c]
                (when (.-mounted ^m/BuildContext ctx)
                  (toast/success! ctx "Published")
                  (when navigator
-                   (case (:type c)
-                     :question (.pushReplacementNamed navigator (str "/questions/" (:slug c)))
-                     :answer (.pushReplacementNamed navigator (str "/answers/" (:id c)))
-                     (.pushReplacementNamed navigator (str "/articles/" (:slug c))))))
+                   (.pushReplacementNamed navigator (published-path c))))
                nil))
       (.catchError (fn [e]
                      (when (.-mounted ^m/BuildContext ctx)
@@ -140,7 +168,7 @@
   "Left-hand tools that need !state (undo/redo enable). Own :watch so the
    scaffold can mount mongol-block-editor without setState-during-build —
    same pattern as mgl-mail-app compose toolbar / mgl-notes-app editor-chrome."
-  [content !state !save-status title-ctrl tags-ctrl content-id]
+  [content !state !save-status title-ctrl tags-ctrl !id type* question-id]
   (f/widget
    :context ctx
    :get [m/Navigator]
@@ -159,12 +187,13 @@
        [(ui/icon-button
          {:icon m.Icons/arrow_back_rounded
           :on-tap (fn []
-                    (-> (save! content-id title-ctrl tags-ctrl !state !save-status)
+                    (-> (persist! !id type* question-id title-ctrl tags-ctrl
+                                  !state !save-status)
                         (.then (fn [saved?]
                                  (when (.-mounted ^m/BuildContext ctx)
-                                   (if saved?
-                                     (.pop navigator)
-                                     (toast/error! ctx "save failed")))
+                                   (when-not saved?
+                                     (toast/error! ctx "save failed"))
+                                   (.pop navigator))
                                  nil)))
                     nil)})
         (ui/gap-v 18)
@@ -187,16 +216,19 @@
         (ui/gap-v 10)
         (ui/action {:label "Publish"
                     :icon m.Icons/publish_rounded
-                    :on-tap #(publish-flow! ctx navigator content-id title-ctrl tags-ctrl !state)})])))))
+                    :on-tap #(publish-flow! ctx navigator !id type* question-id
+                                            title-ctrl tags-ctrl !state !save-status)})])))))
 
 (defn- editor-screen [content]
   (f/widget
    :let [!state (atom (or (:document content) (doc/empty-document)))
          !save-status (atom :idle)
          !save-timer (atom nil)
-         question? (= :question (:type content))
-         answer? (= :answer (:type content))
-         content-id (:id content)
+         !id (atom (:id content))
+         type* (:type content)
+         question-id (:question-id content)
+         question? (= :question type*)
+         answer? (= :answer type*)
          ;; Build editor before any ancestor :watch on !state — mongol-block-editor
          ;; swap!s :editor-config at construction time (same as notes-app).
          editor-body (neditor/widget !state :wrap-ime? false)]
@@ -213,8 +245,9 @@
                      (when-let [t @!save-timer] (.cancel ^async/Timer t))
                      (reset! !save-timer
                              (async/Timer. (dart:core/Duration. .seconds 2)
-                                           #(save! content-id title-ctrl tags-ctrl
-                                                   !state !save-status)))
+                                           #(persist! !id type* question-id
+                                                      title-ctrl tags-ctrl
+                                                      !state !save-status)))
                      nil)]
                (add-watch !state :autosave (fn [_ _ _ _] (schedule!)))
                ;; Title and tags live in controllers, not in !state, so they need
@@ -238,7 +271,8 @@
        (m/Row
         .crossAxisAlignment m.CrossAxisAlignment/stretch
         .children
-        (cond-> [(editor-chrome content !state !save-status title-ctrl tags-ctrl content-id)]
+        (cond-> [(editor-chrome content !state !save-status title-ctrl tags-ctrl
+                                !id type* question-id)]
           (not answer?)
           (conj (meta-field title-ctrl title-focus "Title" m.Icons/title theme/ink))
 
@@ -275,3 +309,36 @@
          reload! (fn [] (asy/load! ctx !st (fetch content-id)) nil)
          _ (reload!)]
    (asy/screen !st editor-screen :retry reload!)))
+
+(defn blank
+  "Local draft. Nothing is POSTed until the reader actually writes."
+  [type*]
+  (f/widget
+   :watch [{:keys [user]} store/session]
+   (if-not user
+     (sign-in/prompt "Sign in to write")
+     (editor-screen {:type (or type* :article)
+                     :status :draft
+                     :title ""
+                     :tags []
+                     :document (doc/empty-document)}))))
+
+(defn blank-answer [question-id]
+  (f/widget
+   :watch [{:keys [user]} store/session]
+   (if-not user
+     (sign-in/prompt "Sign in to write")
+     (f/widget
+      :context ctx
+      :let [!st (atom {:status :loading})
+            reload! (fn [] (asy/load! ctx !st (fetch question-id)) nil)
+            _ (reload!)]
+      (asy/screen !st
+                  (fn [q]
+                    (editor-screen {:type :answer
+                                    :status :draft
+                                    :question-id (:id q)
+                                    :title (str "A: " (or (:title q) ""))
+                                    :tags []
+                                    :document (doc/empty-document)}))
+                  :retry reload!)))))

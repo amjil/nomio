@@ -4,8 +4,8 @@
             [nomio.core.api :as api]
             [nomio.state.store :as store]
             [nomio.theme :as theme]
-            [nomio.widgets.async :as asy]
             [nomio.widgets.mongol :as mg]
+            [nomio.widgets.paged :as paged]
             [nomio.widgets.sign-in :as sign-in]
             [nomio.widgets.toast :as toast]
             [nomio.widgets.ui :as ui]))
@@ -82,16 +82,6 @@
             (ui/gap-v 10)
             (m/Flexible .child (mg/muted actor))])))]))))
 
-(defn- note-list [on-read items]
-  (if (empty? items)
-    (ui/state-view {:icon m.Icons/notifications_off_outlined
-                    :title "No notifications"
-                    :message "Replies, likes and follows land here"})
-    (m/ListView
-     .scrollDirection m.Axis/horizontal
-     .padding (m.EdgeInsets/symmetric .horizontal 8.0)
-     .children (mapv #(note-card on-read %) items))))
-
 (defn- mark-all! [ctx reload!]
   (-> (api/mark-all-notifications-read!)
       (.then (fn [_]
@@ -105,40 +95,44 @@
                      nil)))
   nil)
 
-(defn- aside [ctx data reload!]
-  (let [unread (or (:unread-count data) 0)]
-    (ui/page-header
-     {:title "Notifications"
-      :icon m.Icons/notifications_rounded
-      :subtitle (if (pos? unread) (str unread " unread") "All caught up")
-      :on-refresh reload!
-      :extra (when (pos? unread)
-               (ui/ghost-action {:label "Read all"
-                                 :icon m.Icons/done_all_rounded
-                                 :tone theme/accent
-                                 :on-tap #(mark-all! ctx reload!)}))})))
+(defn- aside [ctx unread reload!]
+  (ui/page-header
+   {:title "Notifications"
+    :icon m.Icons/notifications_rounded
+    :subtitle (if (pos? unread) (str unread " unread") "All caught up")
+    :on-refresh reload!
+    :extra (when (pos? unread)
+             (ui/ghost-action {:label "Read all"
+                               :icon m.Icons/done_all_rounded
+                               :tone theme/accent
+                               :on-tap #(mark-all! ctx reload!)}))}))
 
 (defn- swap-note
   "Drops the server's updated copy in place rather than refetching the list, so
    the card the reader just tapped dims without the strip flickering."
-  [data updated]
-  (-> data
-      (update :items (fn [items]
-                       (mapv #(if (= (:id %) (:id updated)) updated %) items)))
-      (update :unread-count #(max 0 (dec (or % 0))))))
+  [items updated]
+  (mapv #(if (= (:id %) (:id updated)) updated %) items))
 
 (defn- signed-in-page []
   (f/widget
    :context ctx
-   :let [!st (atom {:status :loading})
-         reload! (fn [] (asy/load! ctx !st (api/notifications)) nil)
-         on-read (fn [updated] (swap! !st update :data swap-note updated) nil)
-         _ (reload!)]
-   :watch [st !st]
-   (asy/section (aside ctx (:data st) reload!)
-                !st
-                (fn [data] (note-list on-read (:items data)))
-                :retry reload!)))
+   :let [!st (paged/state)
+         !unread (atom 0)
+         fetch (fn [opts]
+                 (-> (api/notifications opts)
+                     (.then (fn [page]
+                              (when (.-mounted ^m/BuildContext ctx)
+                                (reset! !unread (or (:unread-count page) 0)))
+                              page))))
+         reload! (fn [] (paged/reload! ctx !st fetch) nil)
+         on-read (fn [updated]
+                   (swap! !st update :items swap-note updated)
+                   (swap! !unread #(max 0 (dec (or % 0))))
+                   nil)
+         _ (paged/load-more! ctx !st fetch)]
+   :watch [unread !unread]
+   (paged/section (aside ctx unread reload!)
+                  !st fetch #(note-card on-read %))))
 
 (defn page []
   (f/widget

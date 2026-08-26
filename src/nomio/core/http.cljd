@@ -106,7 +106,7 @@
 
       (= status 401)
       (do
-        (store/clear-session!)
+        (store/kick-to-login!)
         (throw (Exception. "unauthorized")))
 
       :else

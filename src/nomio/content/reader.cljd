@@ -3,6 +3,7 @@
   (:require ["package:flutter/material.dart" :as m]
             [block-editor.widgets.reader :as reader]
             [block-editor.config :as be-config]
+            [cljd.flutter :as f]
             [nomio.content.editor :as neditor]
             [nomio.theme :as theme]
             [nomio.widgets.mongol :as mg]))
@@ -29,17 +30,23 @@
          ids)))
 
 (defn widget
-  "Horizontal Mongolian reader for an MGL Document map."
+  "Horizontal Mongolian reader for an MGL Document map.
+
+   Own ScrollController so a parent rebuild (like, vote, bookmark) does not
+   mint a new ListView controller and jump the paper back to the start."
   [document & {:keys [on-link]}]
-  (let [state (or document {:root [] :blocks {}})
-        !state (atom state)
-        cfg (be-config/build-config (neditor/editor-config on-link))
-        plugins (:block-plugins cfg [])
-        ids (:root state [])]
-    (if (empty? ids)
-      (m/Center .child (mg/muted "…"))
-      (m/ListView
-       .scrollDirection m.Axis/horizontal
-       .padding (m.EdgeInsets/all 16.0)
-       .children
-       [(walk-row ids (:blocks state {}) plugins cfg on-link !state)]))))
+  (f/widget
+   :managed [ctrl (m/ScrollController.)]
+   :let [state (or document {:root [] :blocks {}})
+         !state (atom state)
+         cfg (be-config/build-config (neditor/editor-config on-link))
+         plugins (:block-plugins cfg [])
+         ids (:root state [])]
+   (if (empty? ids)
+     (m/Center .child (mg/muted "…"))
+     (m/ListView
+      .controller ctrl
+      .scrollDirection m.Axis/horizontal
+      .padding (m.EdgeInsets/all 16.0)
+      .children
+      [(walk-row ids (:blocks state {}) plugins cfg on-link !state)]))))

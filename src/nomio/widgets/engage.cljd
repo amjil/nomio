@@ -1,0 +1,50 @@
+(ns nomio.widgets.engage
+  "Like / bookmark / vote. Reads the content atom at tap time so a double
+   tap cannot send the stale flag from the last build."
+  (:require ["package:flutter/material.dart" :as m]
+            [nomio.core.api :as api]
+            [nomio.state.store :as store]
+            [nomio.widgets.toast :as toast]))
+
+(defn toggle-like! [ctx !c]
+  (store/require-auth!
+   (fn []
+     (let [c @!c]
+       (-> (api/toggle-like! (:id c) (boolean (:liked c)))
+           (.then (fn [res]
+                    (when (.-mounted ^m/BuildContext ctx)
+                      (swap! !c assoc
+                             :liked (:liked res)
+                             :like-count (:like-count res)))
+                    nil))
+           (.catchError (fn [e]
+                          (when (.-mounted ^m/BuildContext ctx)
+                            (toast/error! ctx e))
+                          nil))))))
+  nil)
+
+(defn toggle-bookmark! [ctx !c]
+  (store/require-auth!
+   (fn []
+     (-> (api/toggle-bookmark! (:id @!c))
+         (.then (fn [bm]
+                  (when (.-mounted ^m/BuildContext ctx)
+                    (swap! !c assoc :bookmarked bm))
+                  nil))
+         (.catchError (fn [e]
+                        (when (.-mounted ^m/BuildContext ctx)
+                          (toast/error! ctx e))
+                        nil)))))
+  nil)
+
+(defn like-action [ctx !c]
+  (let [liked? (boolean (:liked @!c))]
+    {:icon (if liked? m.Icons/favorite_rounded m.Icons/favorite_border)
+     :active? liked?
+     :on-tap #(toggle-like! ctx !c)}))
+
+(defn bookmark-action [ctx !c]
+  (let [bookmarked? (api/bookmarked? @!c)]
+    {:icon (if bookmarked? m.Icons/bookmark_rounded m.Icons/bookmark_border)
+     :active? bookmarked?
+     :on-tap #(toggle-bookmark! ctx !c)}))

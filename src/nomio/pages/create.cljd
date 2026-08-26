@@ -1,28 +1,17 @@
 (ns nomio.pages.create
   (:require ["package:flutter/material.dart" :as m]
-            [cljd.flutter :as f]
-            [nomio.core.api :as api]
             [nomio.state.store :as store]
             [nomio.theme :as theme]
             [nomio.widgets.mongol :as mg]
-            [nomio.widgets.toast :as toast]
             [nomio.widgets.ui :as ui]))
 
-(defn- start! [ctx type*]
+(defn- start! [type*]
   (store/require-auth!
    (fn []
-     (-> (api/create-content! {:type* type* :title ""})
-         (.then (fn [c]
-                  (when (.-mounted ^m/BuildContext ctx)
-                    (store/push-named! (str "/content/" (:id c) "/edit")))
-                  nil))
-         (.catchError (fn [e]
-                        (when (.-mounted ^m/BuildContext ctx)
-                          (toast/error! ctx e))
-                        nil)))))
+     (store/push-named! (str "/create/new/" (name type*)))))
   nil)
 
-(defn- tile [ctx {:keys [icon label blurb type*]}]
+(defn- tile [{:keys [icon label blurb type*]}]
   (let [{:keys [color wash]} (theme/tone type*)]
     (ui/panel
      {:width 250.0
@@ -31,7 +20,7 @@
       :pad 26.0
       :radius theme/radius-lg
       :shadow theme/card-shadow
-      :on-tap #(start! ctx type*)}
+      :on-tap #(start! type*)}
      (m/Row
       .crossAxisAlignment m.CrossAxisAlignment/stretch
       .children
@@ -51,31 +40,29 @@
        (m/Expanded .flex 3 .child (mg/muted blurb))]))))
 
 (defn page []
-  (f/widget
-   :context ctx
-   (m/Center
-    .child
-    (m/Row
-     .mainAxisSize m.MainAxisSize/min
-     .mainAxisAlignment m.MainAxisAlignment/center
-     .children
-     [(m/Padding
-       .padding (m.EdgeInsets/only .right 20.0)
-       .child
-       (m/Column
-        .mainAxisSize m.MainAxisSize/min
-        .crossAxisAlignment m.CrossAxisAlignment/start
-        .children
-        [(ui/brand 44.0)
-         (ui/gap-v 20)
-         (mg/title "Write" 22.0)
-         (ui/gap-v 12)
-         (mg/muted "Start something new")]))
-      (tile ctx {:icon m.Icons/article_outlined
-                 :label "Article"
-                 :blurb "A piece you publish on its own"
-                 :type* :article})
-      (tile ctx {:icon m.Icons/help_outline
-                 :label "Question"
-                 :blurb "Ask the community for an answer"
-                 :type* :question})]))))
+  (m/Center
+   .child
+   (m/Row
+    .mainAxisSize m.MainAxisSize/min
+    .mainAxisAlignment m.MainAxisAlignment/center
+    .children
+    [(m/Padding
+      .padding (m.EdgeInsets/only .right 20.0)
+      .child
+      (m/Column
+       .mainAxisSize m.MainAxisSize/min
+       .crossAxisAlignment m.CrossAxisAlignment/start
+       .children
+       [(ui/brand 44.0)
+        (ui/gap-v 20)
+        (mg/title "Write" 22.0)
+        (ui/gap-v 12)
+        (mg/muted "Start something new")]))
+     (tile {:icon m.Icons/article_outlined
+            :label "Article"
+            :blurb "A piece you publish on its own"
+            :type* :article})
+     (tile {:icon m.Icons/help_outline
+            :label "Question"
+            :blurb "Ask the community for an answer"
+            :type* :question})])))

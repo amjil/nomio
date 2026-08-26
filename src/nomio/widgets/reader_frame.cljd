@@ -2,7 +2,7 @@
   "Shared furniture for the three reader screens — article, question, answer.
    They differ in what hangs off the sides, not in how a page is framed."
   (:require ["package:flutter/material.dart" :as m]
-            [clojure.string :as str]
+            [nomio.state.store :as store]
             [nomio.theme :as theme]
             [nomio.widgets.mongol :as mg]
             [nomio.widgets.ui :as ui]))
@@ -21,17 +21,36 @@
         (ui/gap-v 9)
         (mg/muted name)]))))
 
-(defn- tag-line [tags on-tag]
-  (ui/tappable
-   on-tag
-   theme/radius-pill
-   (m/Container
-    .padding (m.EdgeInsets/symmetric .horizontal 6.0 .vertical 9.0)
-    .decoration (m/BoxDecoration
-                 .color theme/violet-soft
-                 .borderRadius (theme/r theme/radius-pill))
-    .child (mg/text (str "#" (str/join " #" tags))
-                    {:size 12.0 :color theme/violet :max-lines 2}))))
+(defn- tag-slug [t]
+  (cond
+    (string? t) t
+    (map? t) (or (:slug t) (:name t) "")
+    :else (str t)))
+
+(defn- tag-chip [tag]
+  (let [slug (tag-slug tag)]
+    (if (empty? slug)
+      ui/nothing
+      (ui/tappable
+       #(store/push-named! (str "/tags/" slug))
+       theme/radius-pill
+       (m/Container
+        .padding (m.EdgeInsets/symmetric .horizontal 6.0 .vertical 9.0)
+        .decoration (m/BoxDecoration
+                     .color theme/violet-soft
+                     .borderRadius (theme/r theme/radius-pill))
+        .child (mg/text (str "#" slug)
+                        {:size 12.0 :color theme/violet :max-lines 2}))))))
+
+(defn- tag-line [tags]
+  (m/Column
+   .mainAxisSize m.MainAxisSize/min
+   .crossAxisAlignment m.CrossAxisAlignment/center
+   .children
+   (into []
+         (comp (map tag-chip)
+               (interpose (ui/gap-v 8)))
+         tags)))
 
 (defn- action-col [actions]
   (m/Column
@@ -50,7 +69,7 @@
   "The leading column of a reader: what this is, who wrote it, and
    everything you can do to it. The title lives on the paper, next to
    the body, so a short article still reads as one piece."
-  [{:keys [content on-back on-tag actions extra]}]
+  [{:keys [content on-back actions extra]}]
   (let [{:keys [color wash icon label]} (theme/tone (:type content))
         tags (:tags content)]
     (m/Padding
@@ -81,7 +100,7 @@
                     .children
                     (cond-> [(byline content)]
                       (seq actions) (conj (ui/gap-v 20) (action-col actions))))]
-            (seq tags) (conj (ui/gap-h 12) (tag-line tags on-tag))
+            (seq tags) (conj (ui/gap-h 12) (tag-line tags))
             extra (conj (ui/gap-h 16) extra)))))]))))
 
 (defn paper

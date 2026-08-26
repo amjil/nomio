@@ -22,22 +22,16 @@
 (def shell-tabs
   {"/explore" "explore"
    "/articles" "articles"
-   "/articles/latest" "articles"
-   "/articles/popular" "articles"
    "/questions" "questions"
-   "/questions/latest" "questions"
-   "/questions/unanswered" "questions"
-   "/questions/popular" "questions"
+   "/questions/filter/unanswered" "questions"
    "/search" "search"
    "/bookmarks" "bookmarks"
    "/notifications" "notifications"})
 
-;; /questions/latest stays routable for old links, but the feed is already
-;; newest-first, so it lands on the same filter as /questions.
 (def questions-filters
   {"/questions" :all
-   "/questions/latest" :all
-   "/questions/unanswered" :unanswered})
+   "/questions/unanswered" :unanswered
+   "/questions/filter/unanswered" :unanswered})
 
 (defn- not-found [name]
   (m/Scaffold
@@ -59,6 +53,7 @@
     (cond
       (or (nil? n) (= n "/")) (shell/app-shell)
       (contains? shell-tabs n) (shell/app-shell)
+      (contains? questions-filters n) (shell/app-shell)
       (= n "/login") (auth/login-screen)
       (= n "/register") (auth/register-screen)
       (= n "/create") (m/Scaffold .backgroundColor theme/bg
@@ -67,15 +62,22 @@
       (= n "/create/question") (create/page)
       (= n "/tags") (m/Scaffold .backgroundColor theme/bg
                                 .body (ui/backdrop (tags/page)))
+      (and (= (count parts) 3) (= (first parts) "create") (= (second parts) "new"))
+      (write/blank (keyword (nth parts 2)))
       (and (= (count parts) 2) (= (first parts) "articles"))
       (article/screen (second parts))
-      (and (= (count parts) 2) (= (first parts) "questions"))
-      (question/screen (second parts))
+      (and (= (count parts) 4) (= (first parts) "questions") (= (nth parts 2) "answers"))
+      (answer/screen (nth parts 3))
+      (and (= (count parts) 3) (= (first parts) "questions") (= (nth parts 2) "answer"))
+      (write/blank-answer (second parts))
       (and (= (count parts) 3) (= (first parts) "questions") (= (nth parts 2) "edit"))
       (write/screen (second parts))
+      (and (= (count parts) 2) (= (first parts) "questions"))
+      (question/screen (second parts))
       (and (= (count parts) 2) (= (first parts) "answers"))
       (answer/screen (second parts))
-      (and (= (count parts) 2) (= (first parts) "users"))
+      (or (and (= (count parts) 2) (= (first parts) "users"))
+          (and (= (count parts) 2) (= (first parts) "u")))
       (m/Scaffold .backgroundColor theme/bg
                   .body (ui/backdrop (profile/page (second parts))))
       (and (= (count parts) 2) (= (first parts) "tags"))
@@ -91,7 +93,8 @@
     (when-let [tab (get shell-tabs n)]
       (store/set-nav! tab))
     (when-let [flt (get questions-filters n)]
-      (store/set-questions-filter! flt))
+      (store/set-questions-filter! flt)
+      (store/set-nav! "questions"))
     (m/MaterialPageRoute
      .settings settings
      .builder

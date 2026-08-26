@@ -3,48 +3,71 @@
             [cljd.flutter :as f]
             [nomio.content.reader :as nreader]
             [nomio.core.api :as api]
+            [nomio.platform :as platform]
             [nomio.state.store :as store]
             [nomio.theme :as theme]
             [nomio.widgets.async :as asy]
             [nomio.widgets.comments :as comments]
             [nomio.widgets.content-card :as cards]
+            [nomio.widgets.engage :as engage]
             [nomio.widgets.keyboard :as kb]
+            [nomio.widgets.mongol :as mg]
             [nomio.widgets.paged :as paged]
             [nomio.widgets.reader-frame :as frame]
-            [nomio.widgets.toast :as toast]
             [nomio.widgets.ui :as ui]))
 
-(defn- write-answer! [ctx q]
+(defn- write-answer! [q]
   (store/require-auth!
    (fn []
-     (-> (api/create-content! {:type* :answer
-                               :title (str "A: " (:title q))
-                               :question-id (:id q)})
-         (.then (fn [a]
-                  (when (.-mounted ^m/BuildContext ctx)
-                    (store/push-named! (str "/content/" (:id a) "/edit")))
-                  nil))
-         (.catchError (fn [e]
-                        (when (.-mounted ^m/BuildContext ctx)
-                          (toast/error! ctx e))
-                        nil)))))
+     (store/push-named! (str "/questions/" (:id q) "/answer"))))
   nil)
 
-(defn- toggle-like! [ctx !q content liked?]
-  (store/require-auth!
-   (fn []
-     (-> (api/toggle-like! (:id content) liked?)
-         (.then (fn [res]
-                  (when (.-mounted ^m/BuildContext ctx)
-                    (swap! !q assoc
-                           :liked (:liked res)
-                           :like-count (:like-count res)))
-                  nil))
-         (.catchError (fn [e]
-                        (when (.-mounted ^m/BuildContext ctx)
-                          (toast/error! ctx e))
-                        nil)))))
-  nil)
+(defn- answers-rail [st on-open]
+  (m/Container
+   .decoration (m/BoxDecoration
+                .border (m/Border .left (m/BorderSide .color theme/divider .width 1.0)))
+   .child
+   (m/Padding
+    .padding (m.EdgeInsets/fromLTRB 10.0 18.0 10.0 18.0)
+    .child
+    (ui/tappable
+     on-open theme/radius-sm
+     (m/Padding
+      .padding (m.EdgeInsets/symmetric .horizontal 4.0 .vertical 6.0)
+      .child
+      (m/Column
+       .mainAxisSize m.MainAxisSize/min
+       .crossAxisAlignment m.CrossAxisAlignment/center
+       .children
+       [(m/Icon m.Icons/forum_outlined .size 15.0 .color theme/ink-faint)
+        (ui/gap-v 10)
+        (mg/label "Answers")
+        (ui/gap-v 10)
+        (mg/text (str (count (:items st)))
+                 {:size 13.0 :color theme/ink-muted :weight m.FontWeight/w600})]))))))
+
+(defn- answers-column [!answers fetch]
+  (f/widget
+   :let [!open (atom (not (platform/mobile?)))]
+   :watch [open? !open
+           st !answers]
+   (if-not open?
+     (answers-rail st #(reset! !open true))
+     (m/Expanded
+      .flex 2
+      .child
+      (frame/pane
+       {:label "Answers" :icon m.Icons/forum_outlined}
+       (m/Row
+        .crossAxisAlignment m.CrossAxisAlignment/stretch
+        .children
+        [(m/Expanded .child (paged/strip !answers fetch cards/card))
+         (m/Padding
+          .padding (m.EdgeInsets/only .left 4.0 .right 8.0 .top 12.0 .bottom 12.0)
+          .child
+          (ui/icon-button {:icon m.Icons/close_rounded
+                           :size 32.0
+                           :on-tap #(reset! !open false)}))]))))))
 
 (defn- screen* [q]
   (f/widget
@@ -53,15 +76,13 @@
    :managed [_ime-control (kb/install)
              :dispose kb/restore-ime!]
    :let [!q (atom q)
-         ;; The endpoint windows at 20, so a popular question needs paging or
-         ;; its later answers simply never appear.
          answers-fetch (fn [opts] (api/answers (:id q) opts))
          !answers (paged/state)
          _ (paged/load-more! ctx !answers answers-fetch)
-         !comments (asy/load! ctx (api/comments "question" (:id q)))]
+         !comments (asy/load! ctx (api/comments "question" (:id q)))
+         paper (nreader/widget (:document q))]
    :watch [content !q]
-   (let [mine? (= (:id (store/current-user)) (:author-id content))
-         liked? (boolean (:liked content))]
+   (let [mine? (= (:id (store/current-user)) (:author-id content))]
      (m/Scaffold
       .backgroundColor theme/bg
       .resizeToAvoidBottomInset false
@@ -76,28 +97,21 @@
           [(frame/meta-aside
             {:content content
              :on-back #(.pop navigator)
-             :on-tag #(store/push-named! (str "/tags/" (first (:tags content))))
              :actions
              [(when mine?
                 {:icon m.Icons/edit_outlined
                  :on-tap #(store/push-named! (str "/content/" (:id content) "/edit"))})
-              {:icon (if liked? m.Icons/favorite_rounded m.Icons/favorite_border)
-               :active? liked?
-               :on-tap #(toggle-like! ctx !q content liked?)}]
+              (engage/like-action ctx !q)]
              :extra (ui/action {:label "Answer"
                                 :icon m.Icons/reply_rounded
                                 :tone theme/gold
-                                :on-tap #(write-answer! ctx content)})})
+                                :on-tap #(write-answer! content)})})
 
            (m/Expanded
             .flex 3
-            .child (frame/paper (nreader/widget (:document content))
-                                :title (:title content)))
+            .child (frame/paper paper :title (:title q)))
 
-           (m/Expanded
-            .flex 2
-            .child (frame/pane {:label "Answers" :icon m.Icons/forum_outlined}
-                               (paged/strip !answers answers-fetch cards/card)))
+           (answers-column !answers answers-fetch)
 
            (comments/column "question" (:id content) !comments)]))))))))
 

@@ -1,0 +1,32 @@
+(ns nomio.widgets.links
+  "Resolve a wikilink title to a reader route. The in-memory cache is the
+   fast path; a miss asks search so a title the feed has not listed yet
+   still works, and a total miss tells the reader instead of eating the tap."
+  (:require [clojure.string :as str]
+            [nomio.core.api :as api]
+            [nomio.state.store :as store]
+            [nomio.widgets.toast :as toast]))
+
+(defn- title-of [target]
+  (str/trim (str (if (map? target) (:title target) target))))
+
+(defn open-title!
+  [ctx target]
+  (let [title (title-of target)]
+    (if (str/blank? title)
+      nil
+      (if-let [hit (store/resolve-title title)]
+        (store/open-content! hit)
+        (-> (api/search title {:limit 8})
+            (.then (fn [page]
+                     (let [items (or (:items page) [])
+                           hit (some #(when (= (:title %) title) %) items)]
+                       (when (seq items) (store/remember-titles! items))
+                       (if hit
+                         (store/open-content! hit)
+                         (toast/info! ctx "No page with this title")))
+                     nil))
+            (.catchError (fn [e]
+                           (toast/error! ctx e)
+                           nil))))))
+  nil)

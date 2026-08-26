@@ -22,6 +22,7 @@
    room to actually draw a line of script."
   [c]
   (let [name (author-label c)
+        uname (get-in c [:author :username])
         likes (:like-count c)
         votes (:vote-score c)]
     (m/SizedBox
@@ -32,7 +33,11 @@
       .children
       (cond-> []
         (seq name)
-        (conj (ui/avatar name 30.0)
+        (conj (ui/tappable
+               (when (seq uname)
+                 #(store/push-named! (str "/users/" uname)))
+               theme/radius-pill
+               (ui/avatar name 30.0))
               (ui/gap-v 10)
               (m/Flexible .child (mg/muted name)))
 
@@ -45,7 +50,13 @@
               (ui/stat m.Icons/arrow_upward_rounded votes theme/jade)))))))
 
 (defn card [c]
-  (let [{:keys [color wash icon label]} (theme/tone (:type c))
+  (let [draft? (= :draft (:status c))
+        {:keys [color wash icon label]} (if draft?
+                                          {:color theme/gold
+                                           :wash theme/gold-soft
+                                           :icon m.Icons/edit_outlined
+                                           :label "Draft"}
+                                          (theme/tone (:type c)))
         excerpt (card-excerpt c)]
     (ui/panel
      {:width 200.0
@@ -53,7 +64,9 @@
       :pad 18.0
       :radius theme/radius-lg
       :shadow theme/card-shadow
-      :on-tap #(store/open-content! c)}
+      :on-tap #(if (= :draft (:status c))
+                 (store/push-named! (str "/content/" (:id c) "/edit"))
+                 (store/open-content! c))}
      ;; Vertical script grows *down*, so a run of text spends width one column
      ;; at a time. The two Expanded slots below are that width budget: give it
      ;; away to fixed-size decoration and the text has nowhere to render.

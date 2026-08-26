@@ -7,47 +7,11 @@
             [nomio.theme :as theme]
             [nomio.widgets.async :as asy]
             [nomio.widgets.comments :as comments]
+            [nomio.widgets.engage :as engage]
             [nomio.widgets.keyboard :as kb]
+            [nomio.widgets.links :as links]
             [nomio.widgets.reader-frame :as frame]
-            [nomio.widgets.toast :as toast]
             [nomio.widgets.ui :as ui]))
-
-(defn- open-link [target]
-  (let [title (if (map? target) (:title target) (str target))]
-    (when (seq title)
-      (when-let [hit (store/resolve-title title)]
-        (store/open-content! hit))))
-  nil)
-
-(defn- toggle-like! [ctx !c content liked?]
-  (store/require-auth!
-   (fn []
-     (-> (api/toggle-like! (:id content) liked?)
-         (.then (fn [res]
-                  (when (.-mounted ^m/BuildContext ctx)
-                    (swap! !c assoc
-                           :liked (:liked res)
-                           :like-count (:like-count res)))
-                  nil))
-         (.catchError (fn [e]
-                        (when (.-mounted ^m/BuildContext ctx)
-                          (toast/error! ctx e))
-                        nil)))))
-  nil)
-
-(defn- toggle-bookmark! [ctx !c content]
-  (store/require-auth!
-   (fn []
-     (-> (api/toggle-bookmark! (:id content))
-         (.then (fn [bm]
-                  (when (.-mounted ^m/BuildContext ctx)
-                    (swap! !c assoc :bookmarked bm))
-                  nil))
-         (.catchError (fn [e]
-                        (when (.-mounted ^m/BuildContext ctx)
-                          (toast/error! ctx e))
-                        nil)))))
-  nil)
 
 (defn- screen* [c]
   (f/widget
@@ -56,11 +20,13 @@
    :managed [_ime-control (kb/install)
              :dispose kb/restore-ime!]
    :let [!c (atom c)
-         !comments (asy/load! ctx (api/comments "article" (:id c)))]
+         !comments (asy/load! ctx (api/comments "article" (:id c)))
+         ;; Paper is built from the fetched document, not the watched atom, so
+         ;; like/bookmark cannot reconstruct the ListView.
+         paper (nreader/widget (:document c)
+                               :on-link #(links/open-title! ctx %))]
    :watch [content !c]
-   (let [mine? (= (:id (store/current-user)) (:author-id content))
-         liked? (boolean (:liked content))
-         bookmarked? (api/bookmarked? content)]
+   (let [mine? (= (:id (store/current-user)) (:author-id content))]
      (m/Scaffold
       .backgroundColor theme/bg
       .resizeToAvoidBottomInset false
@@ -75,25 +41,18 @@
           [(frame/meta-aside
             {:content content
              :on-back #(.pop navigator)
-             :on-tag #(store/push-named! (str "/tags/" (first (:tags content))))
              :actions
              [(when mine?
                 {:icon m.Icons/edit_outlined
                  :on-tap #(store/push-named! (str "/content/" (:id content) "/edit"))})
-              {:icon (if liked? m.Icons/favorite_rounded m.Icons/favorite_border)
-               :active? liked?
-               :on-tap #(toggle-like! ctx !c content liked?)}
-              {:icon (if bookmarked? m.Icons/bookmark_rounded m.Icons/bookmark_border)
-               :active? bookmarked?
-               :on-tap #(toggle-bookmark! ctx !c content)}]})
+              (engage/like-action ctx !c)
+              (engage/bookmark-action ctx !c)]})
 
            (m/Expanded
             .flex 3
-            .child (frame/paper (nreader/widget (:document content)
-                                                :on-link open-link)
-                                :title (:title content)))
+            .child (frame/paper paper :title (:title c)))
 
-           (comments/column "article" (:id content) !comments)])))))))) 
+           (comments/column "article" (:id content) !comments)]))))))))
 
 (defn screen [slug]
   (f/widget

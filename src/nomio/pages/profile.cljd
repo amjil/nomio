@@ -7,6 +7,7 @@
             [nomio.widgets.async :as asy]
             [nomio.widgets.content-card :as cards]
             [nomio.widgets.mongol :as mg]
+            [nomio.widgets.paged :as paged]
             [nomio.widgets.sign-in :as sign-in]
             [nomio.widgets.toast :as toast]
             [nomio.widgets.ui :as ui]))
@@ -73,9 +74,12 @@
           ui/nothing)
         (if me? (ui/gap-h 10) ui/nothing)
         (if me?
-          (ui/ghost-action {:label "Saved"
+            (ui/ghost-action {:label "Saved"
                             :icon m.Icons/bookmark_border
-                            :on-tap #(store/set-nav! "bookmarks")})
+                            :on-tap (fn []
+                                      (store/set-nav! "bookmarks")
+                                      (store/pop!)
+                                      nil)})
           ui/nothing)
         (if me? (ui/gap-h 10) ui/nothing)
         (if me?
@@ -85,18 +89,25 @@
                             :on-tap #(api/logout!)})
           ui/nothing)])])))
 
-(defn- contents [data me?]
-  (let [items (concat (:articles data)
-                      (:questions data)
-                      (:answers data)
-                      (when me? (:drafts data)))]
-    (if (empty? items)
-      (ui/state-view {:icon m.Icons/edit_note_rounded
-                      :title "Nothing published yet"
-                      :message (if me?
-                                 "Anything you write shows up here"
-                                 "This account has not published yet")})
-      (cards/strip items))))
+(defn- contents [me? !pub pub-fetch !drafts drafts-fetch]
+  (if-not me?
+    (paged/strip !pub pub-fetch cards/card)
+    (m/Row
+     .crossAxisAlignment m.CrossAxisAlignment/stretch
+     .children
+     [(m/Expanded
+       .flex 3
+       .child (paged/strip !pub pub-fetch cards/card))
+      (m/Expanded
+       .flex 2
+       .child
+       (m/Row
+        .crossAxisAlignment m.CrossAxisAlignment/stretch
+        .children
+        [(m/Padding
+          .padding (m.EdgeInsets/fromLTRB 8.0 24.0 4.0 24.0)
+          .child (mg/label "Drafts" theme/gold))
+         (m/Expanded .child (paged/strip !drafts drafts-fetch cards/card))]))])))
 
 (defn- profile-for [uname me?]
   (f/widget
@@ -104,13 +115,23 @@
    ;; reusing the previous one's State.
    :key uname
    :context ctx
-   :let [!st (atom {:status :loading})
-         reload! (fn [] (asy/load! ctx !st (api/profile uname)) nil)
-         _ (reload!)]
-   :watch [st !st]
-   (asy/section (aside ctx (:data st) me? reload!)
-                !st
-                (fn [data] (contents data me?))
+   :let [!user (atom {:status :loading})
+         !pub (paged/state)
+         !drafts (paged/state)
+         pub-fetch (fn [opts] (api/list-feed (merge {:author uname} opts)))
+         drafts-fetch (fn [opts] (api/mine (merge {:status "draft"} opts)))
+         reload! (fn []
+                   (asy/load! ctx !user (api/profile uname))
+                   (paged/reload! ctx !pub pub-fetch)
+                   (when me? (paged/reload! ctx !drafts drafts-fetch))
+                   nil)
+         _ (do (asy/load! ctx !user (api/profile uname))
+               (paged/load-more! ctx !pub pub-fetch)
+               (when me? (paged/load-more! ctx !drafts drafts-fetch)))]
+   :watch [user-st !user]
+   (asy/section (aside ctx (:data user-st) me? reload!)
+                !user
+                (fn [_] (contents me? !pub pub-fetch !drafts drafts-fetch))
                 :retry reload!)))
 
 (defn page

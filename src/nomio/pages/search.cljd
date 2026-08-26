@@ -14,11 +14,6 @@
 
 (defonce ^:private !ime (atom {:external-keyboard-delegate nil}))
 
-;; Hot-reload alias: StatefulWidget watchers keep the previous build's
-;; schedule! closure, which still looks up this versioned getter.
-(defonce ^{:dart/name debounce$v11} debounce$v11
-  (dart:core/Duration. .milliseconds 250))
-
 (defn- cancel-timer-atom! [!t]
   (when-let [t @!t] (.cancel ^async/Timer t))
   nil)

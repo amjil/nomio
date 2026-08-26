@@ -18,11 +18,10 @@
   (atom {:user nil
          :token nil}))
 
-(defonce ^:private !title-cache (atom {}))
+;; {:by-title {title rec} :order [title ...]} — :order is oldest-first so an
+;; overflow can drop the titles that have not been seen for the longest.
+(defonce ^:private !title-cache (atom {:by-title {} :order []}))
 
-;; Only feeds wikilink autocomplete and resolution, so it can forget freely.
-;; Without a ceiling an infinite scroll would grow it a page at a time and
-;; never give any of it back.
 (def ^:private title-cache-limit 500)
 
 (defn current-user []
@@ -99,31 +98,35 @@
   (persist-session!)
   nil)
 
+(defn- remember-one [{:keys [by-title order]} c]
+  (if-not (seq (:title c))
+    {:by-title by-title :order order}
+    (let [t (:title c)
+          rec (select-keys c [:title :slug :id :type])
+          order* (conj (vec (remove #(= % t) order)) t)
+          by-title* (assoc by-title t rec)
+          overflow (- (count order*) title-cache-limit)]
+      (if (pos? overflow)
+        (let [dropped (take overflow order*)]
+          {:by-title (apply dissoc by-title* dropped)
+           :order (vec (drop overflow order*))})
+        {:by-title by-title* :order order*}))))
+
 (defn remember-titles!
   "Cache enough of each listed content to resolve a wikilink target to a route.
-   Accumulates across pages, so loading page 2 does not drop page 1."
+   Accumulates across pages, so loading page 2 does not drop page 1. Overflow
+   drops the oldest titles, not the batch that just arrived."
   [contents]
-  (let [fresh (into {}
-                    (keep (fn [c]
-                            (when (seq (:title c))
-                              [(:title c) (select-keys c [:title :slug :id :type])])))
-                    contents)]
-    (swap! !title-cache
-           (fn [cache]
-             (let [merged (into cache fresh)]
-               ;; Insertion order is not tracked, so there is no oldest entry to
-               ;; evict — an overflow keeps just the batch that caused it.
-               ;; Autocomplete narrows for a moment; links in view still resolve.
-               (if (> (count merged) title-cache-limit) fresh merged)))))
+  (swap! !title-cache #(reduce remember-one % contents))
   nil)
 
 (defn title-suggestions []
-  (vec (keys @!title-cache)))
+  (vec (:order @!title-cache)))
 
 (defn resolve-title
   "Cached content whose title matches exactly, or nil."
   [title]
-  (get @!title-cache title))
+  (get-in @!title-cache [:by-title title]))
 
 (defn navigator []
   (.-currentState nav-key))
@@ -153,6 +156,24 @@
 
 (defn open-content! [c]
   (push-named! (content-path c))
+  nil)
+
+(defn current-route-name []
+  (when-let [nav (navigator)]
+    (try
+      (when-let [route (m/ModalRoute.of (.-context nav))]
+        (.-name (.-settings route)))
+      (catch Exception _ nil))))
+
+(defn kick-to-login!
+  "Drop the session. Only route to /login when a *previous* session just
+   died — a failed sign-in is itself a 401 and must not push another login."
+  []
+  (let [was-in? (signed-in?)]
+    (clear-session!)
+    (when (and was-in? (navigator))
+      (when-not (contains? #{"/login" "/register"} (current-route-name))
+        (.pushNamed (navigator) "/login"))))
   nil)
 
 (defn require-auth!

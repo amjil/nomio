@@ -65,32 +65,40 @@
    .body (ui/backdrop (m/SafeArea .child (kb/wrap body)))))
 
 (defn- submit-login! [ctx navigator user-ctrl pass-ctrl]
-  (-> (api/login! {:username (str/trim (.-text user-ctrl))
-                   :password (.-text pass-ctrl)})
-      (.then (fn [_]
-               (when (.-mounted ^m/BuildContext ctx)
-                 (toast/success! ctx "Signed in")
-                 (when (.-canPop navigator) (.pop navigator)))
-               nil))
-      (.catchError (fn [e]
-                     (when (.-mounted ^m/BuildContext ctx)
-                       (toast/error! ctx e))
-                     nil)))
+  (let [username (str/trim (.-text user-ctrl))
+        password (.-text pass-ctrl)]
+    (if (or (str/blank? username) (str/blank? password))
+      (toast/info! ctx "Username and password are required")
+      (-> (api/login! {:username username :password password})
+          (.then (fn [_]
+                   (when (.-mounted ^m/BuildContext ctx)
+                     (toast/success! ctx "Signed in")
+                     (when (.-canPop navigator) (.pop navigator)))
+                   nil))
+          (.catchError (fn [e]
+                         (when (.-mounted ^m/BuildContext ctx)
+                           (toast/error! ctx e))
+                         nil)))))
   nil)
 
 (defn- submit-register! [ctx navigator user-ctrl pass-ctrl name-ctrl]
-  (-> (api/register! {:username (str/trim (.-text user-ctrl))
-                      :password (.-text pass-ctrl)
-                      :display-name (str/trim (.-text name-ctrl))})
-      (.then (fn [_]
-               (when (.-mounted ^m/BuildContext ctx)
-                 (toast/success! ctx "Account created")
-                 (when (.-canPop navigator) (.pop navigator)))
-               nil))
-      (.catchError (fn [e]
-                     (when (.-mounted ^m/BuildContext ctx)
-                       (toast/error! ctx e))
-                     nil)))
+  (let [username (str/trim (.-text user-ctrl))
+        password (.-text pass-ctrl)
+        display (str/trim (.-text name-ctrl))]
+    (if (or (str/blank? username) (str/blank? password))
+      (toast/info! ctx "Username and password are required")
+      (-> (api/register! {:username username
+                          :password password
+                          :display-name display})
+          (.then (fn [_]
+                   (when (.-mounted ^m/BuildContext ctx)
+                     (toast/success! ctx "Account created")
+                     (when (.-canPop navigator) (.pop navigator)))
+                   nil))
+          (.catchError (fn [e]
+                         (when (.-mounted ^m/BuildContext ctx)
+                           (toast/error! ctx e))
+                         nil)))))
   nil)
 
 (defn login-screen []
@@ -120,9 +128,7 @@
        (ui/gap-h 12)
        (ui/ghost-action {:label "Register"
                          :icon m.Icons/person_add_alt_1_outlined
-                         :on-tap #(do (.pushReplacementNamed navigator "/register") nil)})
-       (ui/gap-h 18)
-       (ui/top (mg/muted "demo / demo123"))])))))
+                         :on-tap #(do (.pushReplacementNamed navigator "/register") nil)})])))))
 
 (defn register-screen []
   (f/widget
