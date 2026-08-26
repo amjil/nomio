@@ -21,7 +21,8 @@
 ;; refresh. A response carrying a stale :gen is dropped, so a slow page-2 that
 ;; lands after the reader switched tabs cannot append to the wrong list.
 (def ^:private blank
-  {:items [] :status :idle :error nil :done? false :offset 0 :gen 0})
+  {:items [] :pinned [] :status :idle :error nil :done? false
+   :offset 0 :gen 0 :scroll-to-end? false})
 
 (defn- restart
   "Back to empty, but on a new generation so replies to the old one are ignored."
@@ -61,10 +62,13 @@
                    :error nil
                    :failed nil
                    :items (into (:items st) fresh)
+                   :pinned (into [] (remove #(contains? (into #{} (map :id) (into (:items st) fresh)) (:id %))
+                                            (or (:pinned st) [])))
                    :offset (+ (:offset st) (count items))
                    :done? (ended? page fresh (count items)))
       (contains? page :comment-total)
-      (assoc :comment-total (:comment-total page)))))
+      (assoc :comment-total (max (int (or (:comment-total st) 0))
+                                 (int (:comment-total page)))))))
 
 (defn- current?
   "A reply is worth keeping only if its generation is still on screen — and only
@@ -72,14 +76,37 @@
   [ctx !st g]
   (and (.-mounted ^m/BuildContext ctx) (= g (:gen @!st))))
 
+(defn- shown
+  "Server windows, then items posted this session that belong after them."
+  [st]
+  (into (vec (or (:items st) [])) (or (:pinned st) [])))
+
+(defn pin-end!
+  "Place `item` at the chronological end of the full list. If every server
+   window is already on screen it joins :items; otherwise it stays in :pinned
+   so later pages do not leave it sitting in the middle."
+  [!st item]
+  (when (and item (:id item))
+    (swap! !st
+           (fn [st]
+             (let [id (:id item)]
+               (if (some #(= (:id %) id) (shown st))
+                 st
+                 (-> (if (:done? st)
+                       (update st :items (fnil conj []) item)
+                       (update st :pinned (fnil conj []) item))
+                     (assoc :status :ok :error nil :scroll-to-end? true)))))))
+  nil)
+
 (defn load-more!
   "Fetches the next window unless one is already in flight or the feed ended.
    `fetch` takes {:limit n :offset n} and resolves to {:items [...] :has-more b}.
    Returns the in-flight future, or nil when the call was a no-op."
   [ctx !st fetch]
-  (let [{:keys [status done? offset items gen]} @!st]
+  (let [{:keys [status done? offset items pinned gen]} @!st
+        empty? (and (empty? items) (empty? (or pinned [])))]
     (when-not (or done? (contains? in-flight status))
-      (swap! !st assoc :status (if (empty? items) :loading :paging))
+      (swap! !st assoc :status (if empty? :loading :paging))
       (-> (fetch {:limit page-size :offset offset})
           (.then (fn [page]
                    (when (current? ctx !st gen)
@@ -106,7 +133,13 @@
     (-> (fetch {:limit page-size :offset 0})
         (.then (fn [page]
                  (when (current? ctx !st g)
-                   (swap! !st (fn [st] (absorb (assoc blank :gen (:gen st)) page))))
+                   (swap! !st
+                          (fn [st]
+                            (absorb (assoc blank
+                                           :gen (:gen st)
+                                           :pinned (or (:pinned st) [])
+                                           :comment-total (:comment-total st))
+                                    page))))
                  nil))
         (.catchError (fn [e]
                        (when (current? ctx !st g)
@@ -130,6 +163,22 @@
 (defn- detach-scroll! [{:keys [ctrl on-scroll]}]
   (.removeListener ^m/ScrollController ctrl on-scroll)
   (.dispose ^m/ScrollController ctrl)
+  nil)
+
+(defn- jump-end! [^m/ScrollController ctrl]
+  (when (.-hasClients ctrl)
+    (let [end (.-maxScrollExtent (.-position ctrl))]
+      (when (pos? end)
+        (.jumpTo ctrl end))))
+  nil)
+
+(defn- reveal-end! [ctx !st ^m/ScrollController ctrl]
+  (m/WidgetsBinding.instance.addPostFrameCallback
+   (fn [_]
+     (when (.-mounted ^m/BuildContext ctx)
+       (jump-end! ctrl)
+       (swap! !st assoc :scroll-to-end? false))
+     nil))
   nil)
 
 (defn- vacant
@@ -169,7 +218,7 @@
    :context ctx
    :managed [scroll (attach-scroll ctx !st fetch) :dispose detach-scroll!]
    :watch [st !st]
-   (let [items (:items st)
+   (let [items (shown st)
          n (count items)
          ;; A trailing slot costs a separator too, so it is only worth adding
          ;; while there is something to put in it.
@@ -181,7 +230,9 @@
          retry-tail! (fn []
                        (if (= :refresh (:failed st))
                          (do (refresh! ctx !st fetch) nil)
-                         (more!)))]
+                         (more!)))
+         _ (when (:scroll-to-end? st)
+             (reveal-end! ctx !st (:ctrl scroll)))]
      (cond
        (and (empty? items) (= :error (:status st)))
        (asy/view !st (fn [_] (asy/empty-state)) :retry again!)

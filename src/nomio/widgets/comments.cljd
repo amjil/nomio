@@ -146,11 +146,18 @@
        (if on-reply (reply-link on-reply (:id c)) ui/nothing)]
       ;; Replies hang off the right of the root. Top indent is the
       ;; nested step in vertical script (the analogue of a left gutter
-      ;; in horizontal text); the rule marks the thread.
-      (cond-> (mapv (fn [k]
-                      (thread-step (comment-node k on-reply nil (inc depth))))
-                    kids)
-        more? (conj (thread-step (more-replies-control c on-more)))))))
+      ;; in horizontal text); the rule marks the thread. Locally posted
+      ;; replies that belong after the unloaded window sit past More.
+      (let [kid-nodes (mapv (fn [k]
+                              (thread-step (comment-node k on-reply nil (inc depth))))
+                            kids)
+            pending (when-not leaf? (or (:pending-replies c) []))]
+        (cond-> kid-nodes
+          more? (conj (thread-step (more-replies-control c on-more)))
+          (seq pending)
+          (into (mapv (fn [k]
+                        (thread-step (comment-node k on-reply nil (inc depth))))
+                      pending))))))))
 
 (defn- thread-card [c on-reply on-more]
   (ui/panel
@@ -184,9 +191,9 @@
                       :target-id target-id
                       :content content}
                parent-id (assoc :parent-id parent-id)))
-            (.then (fn [_]
+            (.then (fn [posted]
                      (close-dialog! dctx)
-                     (when on-posted (on-posted))
+                     (when on-posted (on-posted posted))
                      (toast/success! ctx "Comment posted")
                      nil))
             (.catchError (fn [e]
@@ -331,15 +338,69 @@
                        :on-tap on-write})]))))
 
 (defn- patch-thread! [!st id f]
-  (swap! !st update :items
-         (fn [items]
-           (mapv (fn [c] (if (= (:id c) id) (f c) c)) items)))
+  (let [touch (fn [xs] (mapv (fn [c] (if (= (:id c) id) (f c) c)) xs))]
+    (swap! !st (fn [st]
+                 (-> st
+                     (update :items touch)
+                     (update :pinned #(touch (or % [])))))))
+  nil)
+
+(defn- ensure-author [posted]
+  (if (get-in posted [:author :username])
+    posted
+    (let [u (store/current-user)]
+      (cond-> posted
+        u (assoc :author {:id (:id u)
+                          :username (:username u)
+                          :display-name (:display-name u)}
+                 :author-id (:id u))))))
+
+(defn- find-in [cs id]
+  (some #(when (= (:id %) id) %) cs))
+
+(defn- with-reply-to [posted root]
+  (let [pid (:parent-id posted)
+        rid (:id root)]
+    (if (or (nil? pid) (= pid rid))
+      posted
+      (if-let [src (or (find-in (or (:replies root) []) pid)
+                       (find-in (or (:pending-replies root) []) pid))]
+        (assoc posted :reply-to src)
+        posted))))
+
+(defn- add-reply [root posted]
+  (let [c (with-reply-to posted root)
+        loaded (vec (or (:replies root) []))
+        pending (vec (or (:pending-replies root) []))
+        seen (into #{} (map :id) (concat loaded pending))]
+    (if (contains? seen (:id c))
+      root
+      (let [caught-up? (not (pos? (replies-left root)))]
+        (if caught-up?
+          (-> root
+              (assoc :replies (conj loaded c))
+              (update :reply-count #(inc (or % (count loaded)))))
+          (-> root
+              (assoc :pending-replies (conj pending c))
+              (update :reply-count #(inc (or % (+ (count loaded) (count pending)))))))))))
+
+(defn- accept-posted!
+  "Drop the created comment into the open strip instead of refetching page 1.
+   A new root belongs at the chronological end; a reply hangs on its thread."
+  [!st posted]
+  (when-let [c (and posted (ensure-author posted))]
+    (if (nil? (:parent-id c))
+      (paged/pin-end! !st (assoc c :replies [] :reply-count 0))
+      (let [rid (or (:root-id c) (:parent-id c))]
+        (patch-thread! !st rid #(add-reply % c))))
+    (swap! !st update :comment-total #(inc (or % 0))))
   nil)
 
 (defn- load-more-replies! [ctx !st id]
   (let [st @!st
         gen (:gen st)
-        root (some #(when (= (:id %) id) %) (:items st))]
+        root (or (some #(when (= (:id %) id) %) (:items st))
+                 (some #(when (= (:id %) id) %) (or (:pinned st) [])))]
     (when (and root
                (.-mounted ^m/BuildContext ctx)
                (not= :paging (:replies-status root))
@@ -356,6 +417,9 @@
                                             fresh (into [] (remove #(contains? seen (:id %))
                                                                    (or (:items page) [])))
                                             loaded (into (vec (or (:replies c) [])) fresh)
+                                            loaded-ids (into #{} (map :id) loaded)
+                                            pending (into [] (remove #(contains? loaded-ids (:id %))
+                                                                     (or (:pending-replies c) [])))
                                             n (count loaded)
                                             ;; Same rule as paged/ended?: an empty window
                                             ;; or the server saying stop both hide More,
@@ -363,12 +427,13 @@
                                             done? (or (empty? fresh)
                                                       (false? (:has-more page)))
                                             total (if done?
-                                                    n
+                                                    (+ n (count pending))
                                                     (or (:reply-total page)
                                                         (:reply-count c)
                                                         n))]
                                         (assoc c
                                                :replies loaded
+                                               :pending-replies pending
                                                :reply-count total
                                                :replies-status :ok)))))
                    nil))
@@ -383,7 +448,8 @@
   "Trailing comments column. Collapsed to a count until opened; writing
    always goes through `compose!` so the paper keeps its width. Roots page
    through paged/strip; each card carries a preview of that thread's replies
-   and can ask for the rest."
+   and can ask for the rest. A newly posted comment is inserted locally
+   rather than refetching page 1."
   [target-type target-id]
   (f/widget
    :context ctx
@@ -391,16 +457,15 @@
          !st (paged/state)
          fetch (fn [opts] (api/comments target-type target-id opts))
          _ (paged/load-more! ctx !st fetch)
-         reload! (fn [] (paged/reload! ctx !st fetch) nil)
          more! (fn [id] (load-more-replies! ctx !st id) nil)]
    :watch [open? !open
            st !st]
    (let [write! (fn [pid]
                   (compose! ctx target-type target-id
                             :parent-id pid
-                            :on-posted (fn []
-                                         (reset! !open true)
-                                         (reload!)))
+                            :on-posted (fn [posted]
+                                         (accept-posted! !st posted)
+                                         (reset! !open true)))
                   nil)]
      (if-not open?
        (rail st #(reset! !open true) #(write! nil))
