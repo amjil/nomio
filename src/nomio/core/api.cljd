@@ -211,6 +211,27 @@
   (-> (http/get! (str "/users/" username))
       (.then (fn [res] {:user (:user res)}))))
 
+(defn update-me!
+  "PATCH /auth/me. Updates the stored session user on success."
+  [attrs]
+  (-> (http/patch! "/auth/me" attrs)
+      (.then (fn [res]
+               (let [u (:user res)]
+                 (store/set-session! u (:token @store/session))
+                 u)))))
+
+(defn followers
+  ([user-id] (followers user-id nil))
+  ([user-id opts]
+   (-> (http/get! (str "/users/" user-id "/followers") (or opts {}))
+       (.then (fn [res] (page-of (or (:data res) []) res))))))
+
+(defn following-users
+  ([user-id] (following-users user-id nil))
+  ([user-id opts]
+   (-> (http/get! (str "/users/" user-id "/following") (or opts {}))
+       (.then (fn [res] (page-of (or (:data res) []) res))))))
+
 (defn mine
   ([] (mine nil))
   ([opts]

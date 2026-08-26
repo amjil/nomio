@@ -12,7 +12,8 @@
 (defonce app-ui
   (atom {:selected-nav-id "home"
          :explore-tab "articles"
-         :questions-filter :all}))
+         :questions-filter :all
+         :home-tab :all}))
 
 (defonce session
   (atom {:user nil
@@ -36,6 +37,10 @@
 
 (defn set-questions-filter! [flt]
   (swap! app-ui assoc :questions-filter flt)
+  nil)
+
+(defn set-home-tab! [tab]
+  (swap! app-ui assoc :home-tab tab)
   nil)
 
 (defn- user->json [u]

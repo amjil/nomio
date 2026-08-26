@@ -6,6 +6,8 @@
    downward and columns advance left to right. That is why widths are the
    scarce dimension and most stacks are Rows."
   (:require ["package:flutter/material.dart" :as m]
+            [nomio.core.http :as http]
+            [nomio.state.store :as store]
             [nomio.theme :as theme]
             [nomio.widgets.mongol :as mg]))
 
@@ -133,31 +135,76 @@
    [theme/jade theme/jade-soft]
    [theme/violet theme/violet-soft]])
 
+(defn- avatar-name [who]
+  (cond
+    (map? who) (or (:display-name who) (:username who) "")
+    :else (str (or who ""))))
+
+(defn- avatar-file-url [who]
+  (when (map? who)
+    (let [id (:avatar-asset-id who)]
+      (when (seq (str (or id "")))
+        (str http/base-url "/assets/" id "/file")))))
+
+(defn- avatar-headers []
+  (if-let [tok (:token @store/session)]
+    {"Authorization" (str "Bearer " tok)}
+    {}))
+
+(defn- avatar-initials [s size tint]
+  (let [has? (pos? (count s))]
+    (m/Center
+     .child
+     (if has?
+       (mg/text (.substring s 0 1)
+                {:size (* (double size) 0.44)
+                 :color tint
+                 :weight m.FontWeight/w700})
+       (m/Icon m.Icons/person_outline .size (* (double size) 0.5) .color tint)))))
+
 (defn avatar
-  "Initial in a tinted circle. The tint is derived from the name so the same
-   person keeps the same colour everywhere."
-  ([name] (avatar name 32.0))
-  ([name size]
-   (let [s (str (or name ""))
+  "Face in a tinted circle. Pass a user map to show their uploaded photo
+   (falling back to the name's initial); a string still draws initials only.
+   The tint is derived from the name so the same person keeps the same colour."
+  ([who] (avatar who 32.0 nil))
+  ([who size] (avatar who size nil))
+  ([who size {:keys [on-tap uploading?]}]
+   (let [s (avatar-name who)
          has? (pos? (count s))
          [tint wash] (nth avatar-tones
-                          (if has? (mod (.codeUnitAt s 0) 4) 0))]
-     (m/Container
-      .width (double size)
-      .height (double size)
-      .decoration (m/BoxDecoration
-                   .color wash
-                   .shape m.BoxShape/circle
-                   .border (m/Border.all .color tint .width 1.0))
-      .child
-      (m/Center
-       .child
-       (if has?
-         (mg/text (.substring s 0 1)
-                  {:size (* (double size) 0.44)
-                   :color tint
-                   :weight m.FontWeight/w700})
-         (m/Icon m.Icons/person_outline .size (* (double size) 0.5) .color tint)))))))
+                          (if has? (mod (.codeUnitAt s 0) 4) 0))
+         url (avatar-file-url who)
+         sz (double size)
+         face (cond
+                uploading?
+                (m/Center
+                 .child (m/SizedBox
+                         .width (* sz 0.42)
+                         .height (* sz 0.42)
+                         .child (m/CircularProgressIndicator
+                                 .strokeWidth 1.8
+                                 .color tint)))
+                (seq url)
+                (m/Image.network url
+                                 .headers (avatar-headers)
+                                 .width sz
+                                 .height sz
+                                 .fit m.BoxFit/cover
+                                 .errorBuilder
+                                 (fn [_ _ _] (avatar-initials s size tint)))
+                :else (avatar-initials s size tint))
+         box (m/Container
+              .width sz
+              .height sz
+              .clipBehavior m.Clip/antiAlias
+              .decoration (m/BoxDecoration
+                           .color wash
+                           .shape m.BoxShape/circle
+                           .border (m/Border.all .color tint .width 1.0))
+              .child face)]
+     (if on-tap
+       (tappable on-tap (/ sz 2.0) box)
+       box))))
 
 (defn icon-button
   "Ghost circle button. Quieter than Material's, and sized for a rail.

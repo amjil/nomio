@@ -37,7 +37,7 @@
                (when (seq uname)
                  #(store/push-named! (str "/users/" uname)))
                theme/radius-pill
-               (ui/avatar name 30.0))
+               (ui/avatar (or (:author c) name) 30.0))
               (ui/gap-v 10)
               (m/Flexible .child (mg/muted name)))
 

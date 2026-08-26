@@ -1,11 +1,16 @@
 (ns nomio.pages.profile
   (:require ["package:flutter/material.dart" :as m]
             [cljd.flutter :as f]
+            [clojure.string :as str]
+            [components.dialog :as dialog]
+            [rich-editor.components.text-field :as custom-tf]
+            [nomio.content.image :as nimage]
             [nomio.core.api :as api]
             [nomio.state.store :as store]
             [nomio.theme :as theme]
             [nomio.widgets.async :as asy]
             [nomio.widgets.content-card :as cards]
+            [nomio.widgets.keyboard :as kb]
             [nomio.widgets.mongol :as mg]
             [nomio.widgets.paged :as paged]
             [nomio.widgets.sign-in :as sign-in]
@@ -26,16 +31,190 @@
                         nil)))))
   nil)
 
-(defn- counter [value label]
-  (m/Column
-   .mainAxisSize m.MainAxisSize/min
-   .crossAxisAlignment m.CrossAxisAlignment/start
-   .children
-   [(mg/text (str (or value 0)) {:size 16.0 :weight m.FontWeight/w700})
-    (ui/gap-v 6)
-    (mg/muted label 11.5)]))
+(defn- change-avatar! [ctx !busy reload!]
+  (when-not @!busy
+    (reset! !busy true)
+    (-> (nimage/pick-path!)
+        (.then (fn [path]
+                 (if path
+                   (api/upload-asset! path)
+                   nil)))
+        (.then (fn [asset]
+                 (if asset
+                   (api/update-me! {:avatar-asset-id (:id asset)})
+                   nil)))
+        (.then (fn [user]
+                 (reset! !busy false)
+                 (when (and user (.-mounted ^m/BuildContext ctx))
+                   (reload!)
+                   (toast/success! ctx "Photo updated"))
+                 nil))
+        (.catchError (fn [e]
+                       (reset! !busy false)
+                       (when (.-mounted ^m/BuildContext ctx)
+                         (toast/error! ctx e))
+                       nil))))
+  nil)
 
-(defn- aside [ctx data me? reload!]
+(defn- close-dialog! [dctx]
+  (kb/dismiss!)
+  (when (.-mounted ^m/BuildContext dctx)
+    (.pop (m/Navigator.of dctx)))
+  nil)
+
+(defn- save-name! [ctx dctx ctrl !busy reload!]
+  (let [name (str/trim (or (.-text ^m/TextEditingController ctrl) ""))]
+    (cond
+      (str/blank? name)
+      (toast/info! ctx "Name cannot be empty")
+
+      @!busy
+      nil
+
+      :else
+      (do
+        (reset! !busy true)
+        (-> (api/update-me! {:display-name name})
+            (.then (fn [_]
+                     (close-dialog! dctx)
+                     (when (.-mounted ^m/BuildContext ctx)
+                       (reload!)
+                       (toast/success! ctx "Profile updated"))
+                     nil))
+            (.catchError (fn [e]
+                           (reset! !busy false)
+                           (when (.-mounted ^m/BuildContext ctx)
+                             (toast/error! ctx e))
+                           nil))))))
+  nil)
+
+(defn- edit-dialog! [ctx u reload!]
+  (m/showDialog
+   .context ctx
+   .builder
+   (fn [dctx]
+     (f/widget
+      :managed [ctrl (m/TextEditingController.
+                      .text (or (:display-name u) (:username u) ""))
+                focus (m/FocusNode.)]
+      :let [!ime (atom {:external-keyboard-delegate nil})
+            !busy (atom false)
+            save! #(save-name! ctx dctx ctrl !busy reload!)]
+      :watch [busy? !busy]
+      (dialog/vertical-custom-dialog
+       {:width-factor 0.55
+        :height-factor 0.58
+        :child
+        (kb/wrap
+         (m/Padding
+          .padding (m.EdgeInsets/all 18.0)
+          .child
+          (m/Row
+           .crossAxisAlignment m.CrossAxisAlignment/stretch
+           .children
+           [(m/Container
+             .alignment m.Alignment/topCenter
+             .padding (m.EdgeInsets/only .right 16.0)
+             .decoration (m/BoxDecoration
+                          .border (m/Border .right (m/BorderSide
+                                                    .color theme/divider
+                                                    .width 1.0)))
+             .child (mg/title "Name" 16.0))
+            (m/Expanded
+             .child
+             (ui/input-panel
+              {:icon m.Icons/badge_outlined
+               :margin (m.EdgeInsets/symmetric .horizontal 4.0 .vertical 8.0)}
+              (custom-tf/text-field
+               !ime
+               {:controller ctrl
+                :focus-node focus
+                :autofocus true
+                :hint "display name"
+                :max-lines 1
+                :style (m/TextStyle .color theme/ink
+                                    .fontFamily theme/font-family)
+                :decoration (m/InputDecoration .border m/InputBorder.none)})))
+            (m/Padding
+             .padding (m.EdgeInsets/only .left 16.0)
+             .child
+             (m/Column
+              .mainAxisAlignment m.MainAxisAlignment/end
+              .children
+              [(ui/ghost-action {:label "Cancel"
+                                 :on-tap #(close-dialog! dctx)})
+               (ui/gap-v 14)
+               (ui/action {:label "Save"
+                           :icon m.Icons/check_rounded
+                           :on-tap (when-not busy? save!)})]))]))
+         "profile-edit-ime")}))))
+  nil)
+
+(defn- counter [value label active? on-tap]
+  (ui/tappable
+   on-tap theme/radius-sm
+   (m/Padding
+    .padding (m.EdgeInsets/symmetric .horizontal 4.0 .vertical 4.0)
+    .child
+    (m/Column
+     .mainAxisSize m.MainAxisSize/min
+     .crossAxisAlignment m.CrossAxisAlignment/start
+     .children
+     [(mg/text (str (or value 0))
+               {:size 16.0
+                :weight m.FontWeight/w700
+                :color (if active? theme/accent theme/ink)})
+      (ui/gap-v 6)
+      (mg/text label {:size 11.5
+                      :color (if active? theme/accent theme/ink-faint)})]))))
+
+(defn- people-fetch [kind user-id]
+  (fn [opts]
+    (if (= kind :followers)
+      (api/followers user-id opts)
+      (api/following-users user-id opts))))
+
+(defn- user-card [u]
+  (let [name (or (:display-name u) (:username u) "")
+        uname (:username u)]
+    (ui/panel
+     {:width 160.0
+      :margin (m.EdgeInsets/symmetric .horizontal 7.0 .vertical 14.0)
+      :pad 16.0
+      :radius theme/radius-lg
+      :shadow theme/soft-shadow
+      :on-tap (when (seq uname)
+                #(store/push-named! (str "/users/" uname)))}
+     (m/Row
+      .crossAxisAlignment m.CrossAxisAlignment/stretch
+      .children
+      [(ui/spine theme/accent)
+       (ui/gap-h 13)
+       (ui/top (ui/avatar u 40.0))
+       (ui/gap-h 10)
+       (m/Expanded
+        .child (mg/text name {:size 16.0 :weight m.FontWeight/w600 :max-lines 2}))
+       (if uname (ui/gap-h 8) ui/nothing)
+       (if uname (mg/muted (str "@" uname) 12.0) ui/nothing)]))))
+
+(defn- people-pane [label !st fetch close!]
+  (m/Row
+   .crossAxisAlignment m.CrossAxisAlignment/stretch
+   .children
+   [(m/Padding
+     .padding (m.EdgeInsets/fromLTRB 8.0 24.0 4.0 24.0)
+     .child
+     (m/Column
+      .mainAxisSize m.MainAxisSize/min
+      .crossAxisAlignment m.CrossAxisAlignment/center
+      .children
+      [(mg/label label theme/accent)
+       (ui/gap-v 14)
+       (ui/icon-button {:icon m.Icons/close_rounded
+                        :on-tap close!})]))
+    (m/Expanded .child (paged/strip !st fetch user-card))]))
+
+(defn- aside [ctx data me? pane !busy reload! open-people! edit!]
   (let [u (:user data)
         following? (boolean (:following u))
         name (or (:display-name u) (:username u) "")]
@@ -43,20 +222,25 @@
      .mainAxisSize m.MainAxisSize/min
      .crossAxisAlignment m.CrossAxisAlignment/start
      .children
-     [(ui/avatar name 54.0)
+     [(ui/avatar u 54.0 {:on-tap (when me? #(change-avatar! ctx !busy reload!))
+                         :uploading? (when me? @!busy)})
       (ui/gap-v 18)
       (m/Flexible .child (mg/title name 20.0))
       (if (:username u) (ui/gap-v 10) ui/nothing)
       (if (:username u) (mg/muted (str "@" (:username u))) ui/nothing)
-      (if (:follower-count u) (ui/gap-v 18) ui/nothing)
-      (if (:follower-count u)
+      (if (some? (:follower-count u)) (ui/gap-v 18) ui/nothing)
+      (if (some? (:follower-count u))
         (m/Row
          .mainAxisSize m.MainAxisSize/min
          .crossAxisAlignment m.CrossAxisAlignment/start
          .children
-         [(counter (:follower-count u) "followers")
+         [(counter (:follower-count u) "followers"
+                   (= pane :followers)
+                   #(open-people! :followers))
           (ui/gap-h 14)
-          (counter (:following-count u) "following")])
+          (counter (:following-count u) "following"
+                   (= pane :following)
+                   #(open-people! :following))])
         ui/nothing)
       (ui/gap-v 20)
       (m/Row
@@ -74,7 +258,13 @@
           ui/nothing)
         (if me? (ui/gap-h 10) ui/nothing)
         (if me?
-            (ui/ghost-action {:label "Saved"
+          (ui/ghost-action {:label "Edit"
+                            :icon m.Icons/edit_outlined
+                            :on-tap #(edit! u)})
+          ui/nothing)
+        (if me? (ui/gap-h 10) ui/nothing)
+        (if me?
+          (ui/ghost-action {:label "Saved"
                             :icon m.Icons/bookmark_border
                             :on-tap (fn []
                                       (store/set-nav! "bookmarks")
@@ -89,7 +279,7 @@
                             :on-tap #(api/logout!)})
           ui/nothing)])])))
 
-(defn- contents [me? !pub pub-fetch !drafts drafts-fetch]
+(defn- writings [me? !pub pub-fetch !drafts drafts-fetch]
   (if-not me?
     (paged/strip !pub pub-fetch cards/card)
     (m/Row
@@ -109,6 +299,13 @@
           .child (mg/label "Drafts" theme/gold))
          (m/Expanded .child (paged/strip !drafts drafts-fetch cards/card))]))])))
 
+(defn- contents [me? pane !pub pub-fetch !drafts drafts-fetch
+                 !people people-fetch close-people!]
+  (case pane
+    :followers (people-pane "Followers" !people people-fetch close-people!)
+    :following (people-pane "Following" !people people-fetch close-people!)
+    (writings me? !pub pub-fetch !drafts drafts-fetch)))
+
 (defn- profile-for [uname me?]
   (f/widget
    ;; Keyed on the username so viewing a different profile refetches instead of
@@ -118,20 +315,45 @@
    :let [!user (atom {:status :loading})
          !pub (paged/state)
          !drafts (paged/state)
+         !people (paged/state)
+         !pane (atom nil)
+         !busy (atom false)
          pub-fetch (fn [opts] (api/list-feed (merge {:author uname} opts)))
          drafts-fetch (fn [opts] (api/mine (merge {:status "draft"} opts)))
+         close-people! (fn [] (reset! !pane nil) nil)
          reload! (fn []
-                   (asy/load! ctx !user (api/profile uname))
-                   (paged/reload! ctx !pub pub-fetch)
-                   (when me? (paged/reload! ctx !drafts drafts-fetch))
+                   (let [id (get-in @!user [:data :user :id])
+                         kind @!pane]
+                     (asy/load! ctx !user (api/profile uname))
+                     (paged/reload! ctx !pub pub-fetch)
+                     (when me? (paged/reload! ctx !drafts drafts-fetch))
+                     (when (and kind id)
+                       (paged/reload! ctx !people (people-fetch kind id))))
                    nil)
+         open-people! (fn [kind]
+                        (if (= kind @!pane)
+                          (reset! !pane nil)
+                          (let [id (get-in @!user [:data :user :id])]
+                            (reset! !pane kind)
+                            (when id
+                              (paged/reload! ctx !people (people-fetch kind id)))))
+                        nil)
+         edit! (fn [u] (edit-dialog! ctx u reload!) nil)
          _ (do (asy/load! ctx !user (api/profile uname))
                (paged/load-more! ctx !pub pub-fetch)
                (when me? (paged/load-more! ctx !drafts drafts-fetch)))]
-   :watch [user-st !user]
-   (asy/section (aside ctx (:data user-st) me? reload!)
+   :watch [user-st !user
+           pane !pane
+           _busy? !busy]
+   (asy/section (aside ctx (:data user-st) me? pane !busy
+                       reload! open-people! edit!)
                 !user
-                (fn [_] (contents me? !pub pub-fetch !drafts drafts-fetch))
+                (fn [_]
+                  (contents me? pane !pub pub-fetch !drafts drafts-fetch
+                            !people
+                            (when-let [id (get-in user-st [:data :user :id])]
+                              (people-fetch pane id))
+                            close-people!))
                 :retry reload!)))
 
 (defn page

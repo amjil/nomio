@@ -1,10 +1,64 @@
 (ns nomio.pages.home
   (:require ["package:flutter/material.dart" :as m]
+            [cljd.flutter :as f]
             [nomio.core.api :as api]
+            [nomio.state.store :as store]
+            [nomio.theme :as theme]
             [nomio.widgets.content-card :as cards]
-            [nomio.widgets.paged :as paged]))
+            [nomio.widgets.filter-bar :as filter-bar]
+            [nomio.widgets.paged :as paged]
+            [nomio.widgets.sign-in :as sign-in]
+            [nomio.widgets.ui :as ui]))
+
+(def ^:private filters
+  [[:all "All"]
+   [:following "Following"]])
+
+(defn- feed [signed-in?]
+  (f/widget
+   ;; Remount when auth flips so Following does not keep a guest's empty
+   ;; strip, and a just-signed-in reader actually hits /me/feed.
+   :key (if signed-in? "in" "out")
+   :context ctx
+   :let [initial (or (:home-tab @store/app-ui) :all)
+         !flt (atom initial)
+         !st (paged/state)
+         fetch (fn [opts]
+                 (if (= @!flt :following)
+                   (api/following-feed opts)
+                   (api/list-feed opts)))
+         apply! (fn [flt]
+                  (reset! !flt flt)
+                  (store/set-home-tab! flt)
+                  (if (and (= flt :following) (not signed-in?))
+                    (paged/clear! !st)
+                    (paged/reload! ctx !st fetch))
+                  nil)
+         _ (apply! initial)]
+   :watch [flt !flt]
+   (m/Row
+    .crossAxisAlignment m.CrossAxisAlignment/stretch
+    .children
+    [(m/Padding
+      .padding (m.EdgeInsets/fromLTRB 20.0 24.0 12.0 24.0)
+      .child
+      (ui/page-header
+       {:title "Home"
+        :icon m.Icons/auto_awesome_rounded
+        :tone theme/accent
+        :subtitle (if (= flt :following)
+                    "From people you follow"
+                    "Everything, newest first")
+        :on-refresh (when (or (not= flt :following) signed-in?)
+                      (fn [] (paged/reload! ctx !st fetch) nil))
+        :extra (filter-bar/single-select filters initial apply!)}))
+     (m/Expanded
+      .key (m/ValueKey flt)
+      .child (if (and (= flt :following) (not signed-in?))
+               (sign-in/prompt "Sign in to see people you follow")
+               (paged/strip !st fetch cards/card)))])))
 
 (defn page []
-  (paged/list-page "Home" api/list-feed cards/card
-                   :icon m.Icons/auto_awesome_rounded
-                   :subtitle "Everything, newest first"))
+  (f/widget
+   :watch [{:keys [user]} store/session]
+   (feed (some? user))))

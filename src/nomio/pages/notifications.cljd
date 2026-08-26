@@ -78,7 +78,7 @@
           (m/Column
            .crossAxisAlignment m.CrossAxisAlignment/start
            .children
-           [(ui/avatar actor 26.0)
+           [(ui/avatar (or (:actor n) actor) 26.0)
             (ui/gap-v 10)
             (m/Flexible .child (mg/muted actor))])))]))))
 

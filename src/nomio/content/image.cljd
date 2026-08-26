@@ -84,15 +84,21 @@
     (when-let [file (first (.-files result))]
       (.-path file))))
 
+(defn pick-path!
+  "Open the system image picker. Resolves to a filesystem path, or nil if cancelled."
+  []
+  (-> (fp/FilePicker.platform.pickFiles .type fp/FileType.image .allowMultiple false)
+      (.then first-path)))
+
 (defn pick-into-block!
   "Pick an image, upload it as a Nomio asset, and hang it on `block-id`.
    Converts the block to :image if it is not one yet."
   [ctx !state block-id]
   (when (and block-id (nil? (get @!uploads block-id)))
     (swap! !uploads assoc block-id :picking)
-    (-> (fp/FilePicker.platform.pickFiles .type fp/FileType.image .allowMultiple false)
-        (.then (fn [result]
-                 (if-let [path (first-path result)]
+    (-> (pick-path!)
+        (.then (fn [path]
+                 (if path
                    (do
                      (ops/convert-block! !state block-id :image)
                      (swap! !uploads assoc block-id :uploading)

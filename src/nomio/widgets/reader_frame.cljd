@@ -17,7 +17,7 @@
        .mainAxisSize m.MainAxisSize/min
        .crossAxisAlignment m.CrossAxisAlignment/center
        .children
-       [(ui/top (ui/avatar name 30.0))
+       [(ui/top (ui/avatar (or (:author content) name) 30.0))
         (ui/gap-v 9)
         (mg/muted name)]))))
 
