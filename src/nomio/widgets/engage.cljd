@@ -11,17 +11,31 @@
   (store/require-auth!
    (fn []
      (let [c @!c]
-       (-> (api/toggle-like! (:id c) (boolean (:liked c)))
-           (.then (fn [res]
-                    (when (.-mounted ^m/BuildContext ctx)
-                      (swap! !c assoc
-                             :liked (:liked res)
-                             :like-count (:like-count res)))
-                    nil))
-           (.catchError (fn [e]
-                          (when (.-mounted ^m/BuildContext ctx)
-                            (toast/error! ctx e))
-                          nil))))))
+       (when-not (:like-busy? c)
+         (let [was-liked? (boolean (:liked c))
+               n (int (or (:like-count c) 0))
+               next-liked? (not was-liked?)
+               next-n (max 0 (+ n (if next-liked? 1 -1)))]
+           (swap! !c assoc
+                  :liked next-liked?
+                  :like-count next-n
+                  :like-busy? true)
+           (-> (api/toggle-like! (:id c) was-liked?)
+               (.then (fn [res]
+                        (when (.-mounted ^m/BuildContext ctx)
+                          (swap! !c assoc
+                                 :liked (:liked res)
+                                 :like-count (:like-count res)
+                                 :like-busy? false))
+                        nil))
+               (.catchError (fn [e]
+                              (when (.-mounted ^m/BuildContext ctx)
+                                (swap! !c assoc
+                                       :liked was-liked?
+                                       :like-count n
+                                       :like-busy? false)
+                                (toast/error! ctx e))
+                              nil))))))))
   nil)
 
 (defn toggle-bookmark! [ctx !c]

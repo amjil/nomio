@@ -563,15 +563,23 @@
    always goes through `compose!` so the paper keeps its width. Roots page
    through paged/strip; each card carries a preview of that thread's replies
    and can ask for the rest. A newly posted comment is inserted locally
-   rather than refetching page 1."
-  [target-type target-id]
+   rather than refetching page 1.
+
+   Pass `:open-atom` to share open state with a sibling pane (question
+   answers). `:on-open` runs just before the column expands, so a phone
+   can collapse the other rail first."
+  [target-type target-id & {:keys [open-atom on-open]}]
   (f/widget
    :context ctx
-   :let [!open (atom false)
+   :let [!open (or open-atom (atom false))
          !st (paged/state)
          fetch (fn [opts] (api/comments target-type target-id opts))
          _ (paged/load-more! ctx !st fetch)
-         more! (fn [id] (load-more-replies! ctx !st id) nil)]
+         more! (fn [id] (load-more-replies! ctx !st id) nil)
+         show! (fn []
+                 (when on-open (on-open))
+                 (reset! !open true)
+                 nil)]
    :watch [open? !open
            st !st
            _sess store/session]
@@ -580,14 +588,14 @@
                             :parent-id pid
                             :on-posted (fn [posted]
                                          (accept-posted! !st posted)
-                                         (reset! !open true)))
+                                         (show!)))
                   nil)
          handlers {:on-reply write!
                    :on-more more!
                    :on-edit #(edit-comment! ctx !st %)
                    :on-delete #(delete-comment! ctx !st %)}]
      (if-not open?
-       (rail st #(reset! !open true) #(write! nil))
+       (rail st show! #(write! nil))
        (m/Expanded
         .flex 2
         .child

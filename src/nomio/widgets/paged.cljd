@@ -68,7 +68,9 @@
                    :done? (ended? page fresh (count items)))
       (contains? page :comment-total)
       (assoc :comment-total (max (int (or (:comment-total st) 0))
-                                 (int (:comment-total page)))))))
+                                 (int (:comment-total page))))
+      (contains? page :total)
+      (assoc :total (int (:total page))))))
 
 (defn- current?
   "A reply is worth keeping only if its generation is still on screen — and only
@@ -138,7 +140,8 @@
                             (absorb (assoc blank
                                            :gen (:gen st)
                                            :pinned (or (:pinned st) [])
-                                           :comment-total (:comment-total st))
+                                           :comment-total (:comment-total st)
+                                           :total (:total st))
                                     page))))
                  nil))
         (.catchError (fn [e]

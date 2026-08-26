@@ -43,16 +43,18 @@
         (ui/gap-v 10)
         (mg/label "Answers")
         (ui/gap-v 10)
-        (mg/text (str (count (:items st)))
+        (mg/text (str (or (:total st) (count (:items st)) 0))
                  {:size 13.0 :color theme/ink-muted :weight m.FontWeight/w600})]))))))
 
-(defn- answers-column [!answers fetch]
+(defn- answers-column [!answers fetch !open on-open]
   (f/widget
-   :let [!open (atom (not (platform/mobile?)))]
    :watch [open? !open
            st !answers]
    (if-not open?
-     (answers-rail st #(reset! !open true))
+     (answers-rail st (fn []
+                        (when on-open (on-open))
+                        (reset! !open true)
+                        nil))
      (m/Expanded
       .flex 2
       .child
@@ -78,6 +80,9 @@
    :let [!q (atom q)
          answers-fetch (fn [opts] (api/answers (:id q) opts))
          !answers (paged/state)
+         !answers-open (atom (not (platform/mobile?)))
+         !comments-open (atom false)
+         phone? (platform/mobile?)
          _ (paged/load-more! ctx !answers answers-fetch)
          paper (nreader/widget (:document q))]
    :watch [content !q]
@@ -111,9 +116,12 @@
             .flex 3
             .child (frame/paper paper :title (:title q)))
 
-           (answers-column !answers answers-fetch)
+           (answers-column !answers answers-fetch !answers-open
+                           (when phone? #(reset! !comments-open false)))
 
-           (comments/column "question" (:id content))]))))))))
+           (comments/column "question" (:id content)
+                            :open-atom !comments-open
+                            :on-open (when phone? #(reset! !answers-open false)))]))))))))
 
 (defn screen [slug]
   (f/widget

@@ -80,7 +80,9 @@
   [items res]
   (cond-> {:items items}
     (contains? (:meta res) :has-more)
-    (assoc :has-more (boolean (get-in res [:meta :has-more])))))
+    (assoc :has-more (boolean (get-in res [:meta :has-more])))
+    (contains? (:meta res) :total)
+    (assoc :total (get-in res [:meta :total]))))
 
 (defn- data-page [res]
   (page-of (data-list res) res))
