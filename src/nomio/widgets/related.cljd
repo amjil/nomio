@@ -1,0 +1,121 @@
+(ns nomio.widgets.related
+  "Same-tag neighbours of the open page. There is no related-content
+   endpoint, so this walks the content's tags via /tags/:slug and drops
+   the item already on screen."
+  (:require ["dart:async" :as async]
+            ["package:flutter/material.dart" :as m]
+            [cljd.flutter :as f]
+            [clojure.string :as str]
+            [nomio.core.api :as api]
+            [nomio.theme :as theme]
+            [nomio.widgets.content-card :as cards]
+            [nomio.widgets.mongol :as mg]
+            [nomio.widgets.paged :as paged]
+            [nomio.widgets.reader-frame :as frame]
+            [nomio.widgets.ui :as ui]))
+
+(defn- tag-slug [t]
+  (cond
+    (string? t) t
+    (map? t) (or (:slug t) (:name t) "")
+    :else (str t)))
+
+(defn- slugs [content]
+  (->> (:tags content)
+       (map tag-slug)
+       (remove str/blank?)
+       vec))
+
+(defn- make-fetch [content]
+  (let [id (:id content)
+        xs (slugs content)]
+    (fn [_opts]
+      (letfn [(go [tags]
+                (if (empty? tags)
+                  (async/Future.value {:items [] :has-more false})
+                  (-> (api/by-tag (first tags) {:limit 12})
+                      (.then (fn [page]
+                               (let [items (into []
+                                                 (remove #(= (:id %) id))
+                                                 (or (:items page) []))]
+                                 (if (seq items)
+                                   {:items items :has-more false}
+                                   (go (rest tags)))))))))]
+        (go xs)))))
+
+(defn- count-mark [st]
+  (cond
+    (= :error (:status st))
+    (m/Icon m.Icons/error_outline_rounded .size 14.0 .color theme/danger)
+    (or (= :loading (:status st)) (= :idle (:status st)))
+    (m/SizedBox
+     .width 14.0 .height 14.0
+     .child (m/CircularProgressIndicator
+             .strokeWidth 1.8 .color theme/accent))
+    :else
+    (mg/text (str (count (:items st)))
+             {:size 13.0 :color theme/ink-muted :weight m.FontWeight/w600})))
+
+(defn- rail [st on-open]
+  (m/Container
+   .decoration (m/BoxDecoration
+                .border (m/Border .left (m/BorderSide .color theme/divider .width 1.0)))
+   .child
+   (m/Padding
+    .padding (m.EdgeInsets/fromLTRB 10.0 18.0 10.0 18.0)
+    .child
+    (ui/tappable
+     on-open theme/radius-sm
+     (m/Padding
+      .padding (m.EdgeInsets/symmetric .horizontal 4.0 .vertical 6.0)
+      .child
+      (m/Column
+       .mainAxisSize m.MainAxisSize/min
+       .crossAxisAlignment m.CrossAxisAlignment/center
+       .children
+       [(m/Icon m.Icons/layers_outlined .size 15.0 .color theme/ink-faint)
+        (ui/gap-v 10)
+        (mg/label "Related")
+        (ui/gap-v 10)
+        (count-mark st)]))))))
+
+(defn- empty-done? [st]
+  (and (:done? st)
+       (empty? (:items st))
+       (not= :error (:status st))))
+
+(defn column
+  "Trailing related-content rail. Stays collapsed so the paper keeps its
+   width; hidden entirely when the open page has no tags, or the tag
+   feeds only contain this item."
+  [content]
+  (f/widget
+   :context ctx
+   :let [tags (slugs content)
+         !open (atom false)
+         !st (paged/state)
+         fetch (make-fetch content)
+         _ (when (seq tags) (paged/load-more! ctx !st fetch))]
+   :watch [open? !open
+           st !st]
+   (cond
+     (or (empty? tags) (empty-done? st))
+     ui/nothing
+     (not open?)
+     (rail st (fn [] (reset! !open true) nil))
+     :else
+     (m/Expanded
+      .flex 2
+      .child
+      (frame/pane
+       {:label "Related" :icon m.Icons/layers_outlined}
+       (m/Row
+        .crossAxisAlignment m.CrossAxisAlignment/stretch
+        .children
+        [(m/Expanded .child (paged/strip !st fetch cards/card))
+         (m/Padding
+          .padding (m.EdgeInsets/only .left 4.0 .right 8.0 .top 12.0 .bottom 12.0)
+          .child
+          (ui/icon-button {:icon m.Icons/close_rounded
+                           :size 32.0
+                           :on-tap #(reset! !open false)}))]))))))

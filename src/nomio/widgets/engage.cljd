@@ -41,15 +41,20 @@
 (defn toggle-bookmark! [ctx !c]
   (store/require-auth!
    (fn []
-     (-> (api/toggle-bookmark! (:id @!c))
-         (.then (fn [bm]
-                  (when (.-mounted ^m/BuildContext ctx)
-                    (swap! !c assoc :bookmarked bm))
-                  nil))
-         (.catchError (fn [e]
+     (let [c @!c]
+       (when-not (:bookmark-busy? c)
+         (let [was? (boolean (:bookmarked c))]
+           (swap! !c assoc :bookmarked (not was?) :bookmark-busy? true)
+           (-> (api/toggle-bookmark! (:id c))
+               (.then (fn [bm]
                         (when (.-mounted ^m/BuildContext ctx)
-                          (toast/error! ctx e))
-                        nil)))))
+                          (swap! !c assoc :bookmarked bm :bookmark-busy? false))
+                        nil))
+               (.catchError (fn [e]
+                              (when (.-mounted ^m/BuildContext ctx)
+                                (swap! !c assoc :bookmarked was? :bookmark-busy? false)
+                                (toast/error! ctx e))
+                              nil))))))))
   nil)
 
 (defn like-action [ctx !c]

@@ -26,13 +26,13 @@
 
 (def ^:private ease (dart:core/Duration. .milliseconds 180))
 
-(defn- destination [{:keys [id icon selected-icon label]} active?]
+(defn- destination [{:keys [id icon selected-icon label]} active? badge?]
   (m/Padding
    .padding (m.EdgeInsets/symmetric .horizontal 9.0 .vertical 3.0)
    .child
    (m/AnimatedContainer
     .duration ease
-    .clipBehavior m.Clip/antiAlias
+    .clipBehavior m.Clip/none
     .decoration (m/BoxDecoration
                  .color (if active? theme/accent-soft theme/transparent)
                  .borderRadius (theme/r 17.0)
@@ -49,9 +49,10 @@
       (m/Column
        .mainAxisSize m.MainAxisSize/min
        .children
-       [(m/Icon (if active? selected-icon icon)
-                .size 21.0
-                .color (if active? theme/accent theme/ink-faint))
+       [(ui/pip (m/Icon (if active? selected-icon icon)
+                        .size 21.0
+                        .color (if active? theme/accent theme/ink-faint))
+                badge?)
         (m/SizedBox .height 10.0)
         (mg/text label {:size 12.5
                         :max-lines 1
@@ -75,6 +76,7 @@
    ;; Subscribing to the whole app-ui atom would rebuild the rail whenever an
    ;; unrelated key (explore tab, question filter) changes.
    :watch [selected-nav-id (f/sub store/app-ui :selected-nav-id)
+           unread (f/sub store/app-ui :unread-count)
            {:keys [user]} store/session]
    (m/Container
     .width 80.0
@@ -98,6 +100,12 @@
          .child
          (m/Column
           .children
-          (mapv (fn [t] (destination t (= (:id t) selected-nav-id))) tabs))))
+          (mapv (fn [t]
+                  (destination t
+                               (= (:id t) selected-nav-id)
+                               (and user
+                                    (= (:id t) "notifications")
+                                    (pos? (or unread 0)))))
+                tabs))))
        (m/Container .height 1.0 .width 34.0 .color theme/divider)
        (footer user)])))))

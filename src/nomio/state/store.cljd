@@ -13,7 +13,8 @@
   (atom {:selected-nav-id "home"
          :explore-tab "articles"
          :questions-filter :all
-         :home-tab :all}))
+         :home-tab :all
+         :unread-count 0}))
 
 (defonce session
   (atom {:user nil
@@ -41,6 +42,14 @@
 
 (defn set-home-tab! [tab]
   (swap! app-ui assoc :home-tab tab)
+  nil)
+
+(defn set-unread! [n]
+  (swap! app-ui assoc :unread-count (max 0 (int (or n 0))))
+  nil)
+
+(defn dec-unread! []
+  (swap! app-ui update :unread-count #(max 0 (dec (int (or % 0)))))
   nil)
 
 (defn- user->json [u]
@@ -100,6 +109,7 @@
 
 (defn clear-session! []
   (swap! session assoc :user nil :token nil)
+  (set-unread! 0)
   (persist-session!)
   nil)
 

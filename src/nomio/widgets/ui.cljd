@@ -16,6 +16,29 @@
 (defn gap-h [n] (m/SizedBox .width (double n)))
 (defn gap-v [n] (m/SizedBox .height (double n)))
 
+(defn pip
+  "Accent dot on the top-trailing corner of `child`. Hidden when `show?`
+   is false so callers can keep the same slot in a nav icon."
+  [child show?]
+  (if-not show?
+    child
+    (m/Stack
+     .clipBehavior m.Clip/none
+     .alignment m.Alignment/center
+     .children
+     [child
+      (m/Positioned
+       .right 0.0
+       .top 0.0
+       .child
+       (m/Container
+        .width 8.0
+        .height 8.0
+        .decoration (m/BoxDecoration
+                     .color theme/accent
+                     .shape m.BoxShape/circle
+                     .border (m/Border.all .color theme/surface .width 1.5))))])))
+
 ;; --- Surfaces --------------------------------------------------------------
 
 (defn backdrop

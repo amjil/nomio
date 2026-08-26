@@ -85,6 +85,7 @@
 (defn- mark-all! [ctx reload!]
   (-> (api/mark-all-notifications-read!)
       (.then (fn [_]
+               (store/set-unread! 0)
                (when (.-mounted ^m/BuildContext ctx)
                  (reload!)
                  (toast/success! ctx "Marked as read"))
@@ -117,20 +118,14 @@
   (f/widget
    :context ctx
    :let [!st (paged/state)
-         !unread (atom 0)
-         fetch (fn [opts]
-                 (-> (api/notifications opts)
-                     (.then (fn [page]
-                              (when (.-mounted ^m/BuildContext ctx)
-                                (reset! !unread (or (:unread-count page) 0)))
-                              page))))
+         fetch (fn [opts] (api/notifications opts))
          reload! (fn [] (paged/reload! ctx !st fetch) nil)
          on-read (fn [updated]
                    (swap! !st update :items swap-note updated)
-                   (swap! !unread #(max 0 (dec (or % 0))))
+                   (store/dec-unread!)
                    nil)
          _ (paged/load-more! ctx !st fetch)]
-   :watch [unread !unread]
+   :watch [unread (f/sub store/app-ui :unread-count)]
    (paged/section (aside ctx unread reload!)
                   !st fetch #(note-card on-read %))))
 

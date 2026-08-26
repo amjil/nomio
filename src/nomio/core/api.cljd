@@ -89,6 +89,19 @@
 
 (defn- ok [x] (async/Future.value x))
 
+(defn- refresh-unread!
+  "Cheap unread tally for the nav pip. Limit 1 because we only need the
+   envelope's unread_count, not the page of notes."
+  []
+  (if (store/signed-in?)
+    (-> (http/get! "/notifications" {:limit 1})
+        (.then (fn [res]
+                 (store/set-unread! (or (:unread-count res) 0))
+                 true))
+        (.catchError (fn [_] true)))
+    (do (store/set-unread! 0)
+        (ok true))))
+
 (defn init!
   "Restores a stored session and revalidates the token before the UI mounts."
   []
@@ -99,7 +112,7 @@
                      (.then (fn [res]
                               (store/set-session! (:user res)
                                                   (:token @store/session))
-                              true))
+                              (refresh-unread!)))
                      (.catchError (fn [_]
                                     (store/clear-session!)
                                     true)))
@@ -112,7 +125,9 @@
                    :display-name (:display-name creds)})
       (.then (fn [res]
                (store/set-session! (:user res) (:token res))
-               {:user (:user res) :token (:token res)}))))
+               (-> (refresh-unread!)
+                   (.then (fn [_]
+                            {:user (:user res) :token (:token res)})))))))
 
 (defn login! [creds]
   (-> (http/post! "/auth/login"
@@ -120,7 +135,9 @@
                    :password (:password creds)})
       (.then (fn [res]
                (store/set-session! (:user res) (:token res))
-               {:user (:user res) :token (:token res)}))))
+               (-> (refresh-unread!)
+                   (.then (fn [_]
+                            {:user (:user res) :token (:token res)})))))))
 
 (defn logout! []
   (let [done (fn [_]
@@ -357,8 +374,10 @@
   ([opts]
    (-> (http/get! "/notifications" (or opts {}))
        (.then (fn [res]
-                (-> (page-of (or (:data res) []) res)
-                    (assoc :unread-count (or (:unread-count res) 0))))))))
+                (let [n (or (:unread-count res) 0)]
+                  (store/set-unread! n)
+                  (-> (page-of (or (:data res) []) res)
+                      (assoc :unread-count n))))))))
 
 (defn mark-notification-read! [id]
   (-> (http/post! (str "/notifications/" id "/read"))

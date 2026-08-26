@@ -12,6 +12,7 @@
             [nomio.widgets.keyboard :as kb]
             [nomio.widgets.mongol :as mg]
             [nomio.widgets.reader-frame :as frame]
+            [nomio.widgets.related :as related]
             [nomio.widgets.toast :as toast]
             [nomio.widgets.ui :as ui]))
 
@@ -114,7 +115,10 @@
           .flex 3
           .child (frame/paper paper :title (:title a)))
 
-         (comments/column "answer" (:id ans))])))))))
+         (comments/column "answer" (:id ans))
+         (related/column (cond-> ans
+                           (and (empty? (:tags ans)) q)
+                           (assoc :tags (:tags q))))])))))))
 
 (defn- fetch
   "An answer plus its parent question. A missing question still renders the

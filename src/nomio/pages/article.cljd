@@ -11,6 +11,7 @@
             [nomio.widgets.keyboard :as kb]
             [nomio.widgets.links :as links]
             [nomio.widgets.reader-frame :as frame]
+            [nomio.widgets.related :as related]
             [nomio.widgets.ui :as ui]))
 
 (defn- screen* [c]
@@ -52,7 +53,8 @@
             .flex 3
             .child (frame/paper paper :title (:title c)))
 
-           (comments/column "article" (:id content))]))))))))
+           (comments/column "article" (:id content))
+           (related/column content)]))))))))
 
 (defn screen [slug]
   (f/widget

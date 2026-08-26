@@ -14,6 +14,7 @@
             [nomio.widgets.mongol :as mg]
             [nomio.widgets.paged :as paged]
             [nomio.widgets.reader-frame :as frame]
+            [nomio.widgets.related :as related]
             [nomio.widgets.ui :as ui]))
 
 (defn- write-answer! [q]
@@ -121,7 +122,8 @@
 
            (comments/column "question" (:id content)
                             :open-atom !comments-open
-                            :on-open (when phone? #(reset! !answers-open false)))]))))))))
+                            :on-open (when phone? #(reset! !answers-open false)))
+           (related/column content)]))))))))
 
 (defn screen [slug]
   (f/widget

@@ -17,7 +17,7 @@
 
 ;; Icons only: a vertical-script label under each one would double the bar's
 ;; height, and these five glyphs are conventional enough to stand alone.
-(defn- destination [{:keys [id icon selected-icon]} active?]
+(defn- destination [{:keys [id icon selected-icon]} active? badge?]
   (ui/tappable
    (fn []
      (s/HapticFeedback.mediumImpact)
@@ -29,13 +29,15 @@
     .decoration (m/BoxDecoration
                  .color (if active? theme/accent-soft theme/transparent)
                  .borderRadius (theme/r theme/radius-pill))
-    .child (m/Icon (if active? selected-icon icon)
-                   .size 23.0
-                   .color (if active? theme/accent theme/ink-faint)))))
+    .child (ui/pip (m/Icon (if active? selected-icon icon)
+                           .size 23.0
+                           .color (if active? theme/accent theme/ink-faint))
+                   badge?))))
 
 (defn bar []
   (f/widget
-   :watch [nav-id (f/sub store/app-ui :selected-nav-id)]
+   :watch [nav-id (f/sub store/app-ui :selected-nav-id)
+           unread (f/sub store/app-ui :unread-count)]
    (let [tabs side/mobile-tabs
          wanted (get nearest-tab nav-id nav-id)]
      (m/Container
@@ -55,4 +57,9 @@
         (m/Row
          .mainAxisAlignment m.MainAxisAlignment/spaceAround
          .children
-         (mapv (fn [t] (destination t (= (:id t) wanted))) tabs))))))))
+         (mapv (fn [t]
+                 (destination t
+                              (= (:id t) wanted)
+                              (and (= (:id t) "notifications")
+                                   (pos? (or unread 0)))))
+               tabs))))))))
