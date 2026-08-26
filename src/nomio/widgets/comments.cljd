@@ -65,26 +65,48 @@
 
 (defn- two-level-by-parent
   "Roots stay roots. A reply-to-a-reply is rehung off the thread root so
-   it still shows — as a sibling of the first reply, never a third indent."
+   it still shows — as a sibling of the first reply, never a third indent.
+   The original parent is kept on :reply-to so the UI can paint @author."
   [comments]
   (let [by-id (by-id-map comments)]
     (->> comments
          (map (fn [c]
-                (if (:parent-id c)
-                  (let [rid (thread-root-id c by-id)]
-                    (if (= rid (:id c)) c (assoc c :parent-id rid)))
+                (if-let [pid (:parent-id c)]
+                  (let [rid (thread-root-id c by-id)
+                        parent (get by-id pid)
+                        mention? (and parent (not= pid rid))]
+                    (cond-> (assoc c :parent-id rid)
+                      mention? (assoc :reply-to parent)))
                   c)))
          (group-by :parent-id))))
+
+(defn- reply-to-mark
+  "Grey @author of the comment this one actually replied to. Only painted
+   when that parent is not the thread root (a second-level-to-second-level
+   reply still sits at depth 1)."
+  [c]
+  (if-let [src (:reply-to c)]
+    (let [name (author-label src)]
+      (if (str/blank? name)
+        ui/nothing
+        (m/Row
+         .mainAxisSize m.MainAxisSize/min
+         .children
+         [(mg/text (str "@" name)
+                   {:size 13.0 :color theme/ink-faint :height 1.3})
+          (ui/gap-h 10)])))
+    ui/nothing))
 
 (defn- comment-node
   "One comment and, at depth 0 only, its replies. A Row, not a Column: the
    byline, body, reply control and nested replies step left to right so
    each vertical line of Mongolian can run the full height of the pane.
-   Depth is capped at two (root + reply); replies do not nest further."
+   Depth is capped at two (root + reply); replies do not nest further, but
+   a second-level comment can still be replied to — the new one hangs next
+   to its siblings with a grey @author pointing at the original."
   [c by-parent on-reply depth]
   (let [leaf? (>= depth 1)
-        kids (when-not leaf? (or (get by-parent (:id c)) []))
-        reply? (and on-reply (not leaf?))]
+        kids (when-not leaf? (or (get by-parent (:id c)) []))]
     (m/Row
      .crossAxisAlignment m.CrossAxisAlignment/start
      .mainAxisSize m.MainAxisSize/min
@@ -92,9 +114,10 @@
      (into
       [(byline c)
        (ui/gap-h 14)
+       (reply-to-mark c)
        (mg/text (or (:content c) "") {:size 14.5 :height 1.3})
-       (if reply? (ui/gap-h 10) ui/nothing)
-       (if reply? (reply-link on-reply (:id c)) ui/nothing)]
+       (if on-reply (ui/gap-h 10) ui/nothing)
+       (if on-reply (reply-link on-reply (:id c)) ui/nothing)]
       ;; Replies hang off the right of the root. Top indent is the
       ;; nested step in vertical script (the analogue of a left gutter
       ;; in horizontal text); the rule marks the thread.
