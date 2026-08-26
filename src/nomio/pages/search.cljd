@@ -79,10 +79,10 @@
 (defn page []
   (f/widget
    :context ctx
-   :managed [!query (atom "")
-             !results (paged/state)
-             !timer (atom nil)
-             _ime-control (kb/install)
+   :let [!query (atom "")
+         !results (paged/state)
+         !timer (atom nil)]
+   :managed [_ime-control (kb/install)
              :dispose kb/restore-ime!
              ctrl (m/TextEditingController.)
              focus (m/FocusNode.)
@@ -106,7 +106,12 @@
    :bg-watcher ([^m/TextEditingValue {v .-text} ctrl]
                 (schedule-search! !timer run! (or v "")))
    :watch [query !query]
-   :let [clear! (fn [] (.clear ctrl) (run! "") nil)
+   :let [clear! (fn []
+                  (kb/dismiss!)
+                  (.clear ctrl)
+                  (run! "")
+                  (.requestFocus focus)
+                  nil)
          fields (field-and-results query ctrl focus schedule! clear! !results fetch)]
    ;; Own Scaffold so the IME overlay Stack fills the content pane.
    ;; Desktop: header stays outside kb/wrap so the overlay origin sits on the

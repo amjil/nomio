@@ -6,7 +6,9 @@
             [nomio.theme :as theme]
             [virtual-keyboard.input-control :as input-control]
             [virtual-keyboard.keyboard :as vk]
+            [virtual-keyboard.keyboard-action :as vk-action]
             [virtual-keyboard.options :as vk-options]
+            [shared-ime.controller :as ime]
             [shared-ime.overlay-view :as overlay]))
 
 (def info
@@ -26,7 +28,17 @@
   (input-control/set-control)
   true)
 
+(defn dismiss!
+  "Hide desktop IME candidates and the mobile suggestion strip, like Escape.
+   Keeps the active field registered so typing can continue."
+  []
+  (swap! ime/!ime-state assoc :buffer "" :preview-len 0 :candidates [] :page-index 0)
+  (vk-action/clear-candidates)
+  nil)
+
 (defn restore-ime! [_]
+  (ime/unregister-client!)
+  (vk-action/clear-candidates)
   (input-control/restore-control)
   nil)
 
