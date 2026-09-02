@@ -76,6 +76,7 @@
         (reset! !busy true)
         (-> (api/update-me! {:display-name name})
             (.then (fn [_]
+                     (reset! !busy false)
                      (close-dialog! dctx)
                      (when (.-mounted ^m/BuildContext ctx)
                        (reload!)
@@ -96,7 +97,9 @@
      (f/widget
       :managed [ctrl (m/TextEditingController.
                       .text (or (:display-name u) (:username u) ""))
-                focus (m/FocusNode.)]
+                focus (m/FocusNode.)
+                _ime-control (kb/install)
+                :dispose kb/restore-ime!]
       :let [!ime (atom {:external-keyboard-delegate nil})
             !busy (atom false)
             save! #(save-name! ctx dctx ctrl !busy reload!)]
@@ -267,8 +270,9 @@
           (ui/ghost-action {:label "Saved"
                             :icon m.Icons/bookmark_border
                             :on-tap (fn []
-                                      (store/set-nav! "bookmarks")
-                                      (store/pop!)
+                                      (if (= "/" (store/current-route-name))
+                                        (store/set-nav! "bookmarks")
+                                        (store/replace-named! "/bookmarks"))
                                       nil)})
           ui/nothing)
         (if me? (ui/gap-h 10) ui/nothing)
