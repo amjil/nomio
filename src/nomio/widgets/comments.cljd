@@ -84,8 +84,14 @@
 
 (def ^:private reply-page-size 20)
 
-(defn- replies-left [c]
-  (- (or (:reply-count c) 0) (count (or (:replies c) []))))
+(defn- replies-left
+  "Replies still waiting on the server. What this session posted already sits in
+   :pending-replies, so counting it as unloaded would both inflate the More
+   badge and keep it on screen after the last window arrived."
+  [c]
+  (max 0 (- (or (:reply-count c) 0)
+            (count (or (:replies c) []))
+            (count (or (:pending-replies c) [])))))
 
 (defn- more-replies-control [c on-more]
   (let [left (replies-left c)

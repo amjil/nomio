@@ -55,36 +55,48 @@
 
 (defn- persist!
   "Create on first save, patch afterwards. Empty new drafts skip the network
-   so tapping Write does not leave a blank document on the server."
-  [!id type* question-id ^m/TextEditingController title-ctrl tags-ctrl !state !save-status]
-  (let [id @!id]
-    (if (and (nil? id) (not (worth-saving? type* title-ctrl tags-ctrl !state)))
-      (async/Future.value true)
-      (do
-        (reset! !save-status :saving)
-        (let [body {:title (.-text title-ctrl)
-                    :document @!state
-                    :tags (parse-tags tags-ctrl)}]
-          (if id
-            (-> (api/save-draft! id body)
-                (.then (fn [_]
-                         (reset! !save-status :saved)
-                         true))
-                (.catchError (fn [e]
-                               (reset! !save-status :error)
-                               (dart:core/print (str "autosave failed: " e))
-                               false)))
-            (-> (api/create-content!
-                 (cond-> (assoc body :type* type*)
-                   question-id (assoc :question-id question-id)))
-                (.then (fn [c]
-                         (reset! !id (:id c))
-                         (reset! !save-status :saved)
-                         true))
-                (.catchError (fn [e]
-                               (reset! !save-status :error)
-                               (dart:core/print (str "autosave failed: " e))
-                               false)))))))))
+   so tapping Write does not leave a blank document on the server.
+
+   Saves run one at a time. A call made while another is in flight waits for it
+   instead of racing it, because until the first create resolves !id is still
+   nil and a second one would POST a duplicate draft."
+  [!saving !id type* question-id ^m/TextEditingController title-ctrl tags-ctrl
+   !state !save-status]
+  (if-let [pending @!saving]
+    (.then pending
+           (fn [_]
+             (persist! !saving !id type* question-id title-ctrl tags-ctrl
+                       !state !save-status)))
+    (let [id @!id]
+      (if (and (nil? id) (not (worth-saving? type* title-ctrl tags-ctrl !state)))
+        (async/Future.value true)
+        (do
+          (reset! !save-status :saving)
+          (let [body {:title (.-text title-ctrl)
+                      :document @!state
+                      :tags (parse-tags tags-ctrl)}
+                fut (if id
+                      (-> (api/save-draft! id body)
+                          (.then (fn [_]
+                                   (reset! !save-status :saved)
+                                   true))
+                          (.catchError (fn [e]
+                                         (reset! !save-status :error)
+                                         (dart:core/print (str "autosave failed: " e))
+                                         false)))
+                      (-> (api/create-content!
+                           (cond-> (assoc body :type* type*)
+                             question-id (assoc :question-id question-id)))
+                          (.then (fn [c]
+                                   (reset! !id (:id c))
+                                   (reset! !save-status :saved)
+                                   true))
+                          (.catchError (fn [e]
+                                         (reset! !save-status :error)
+                                         (dart:core/print (str "autosave failed: " e))
+                                         false))))]
+            (reset! !saving fut)
+            (.whenComplete fut (fn [] (compare-and-set! !saving fut nil) nil))))))))
 
 (defn- published-path [c]
   (case (:type c)
@@ -92,8 +104,8 @@
     :answer (str "/answers/" (:id c))
     (str "/articles/" (or (:slug c) (:id c)))))
 
-(defn- publish-flow! [ctx navigator !id type* question-id title-ctrl tags-ctrl !state !save-status]
-  (-> (persist! !id type* question-id title-ctrl tags-ctrl !state !save-status)
+(defn- publish-flow! [ctx navigator !id save!]
+  (-> (save!)
       (.then (fn [saved?]
                (if-not saved?
                  (throw (Exception. "save failed"))
@@ -171,7 +183,7 @@
   "Left-hand tools that need !state (undo/redo enable). Own :watch so the
    scaffold can mount mongol-block-editor without setState-during-build —
    same pattern as mgl-mail-app compose toolbar / mgl-notes-app editor-chrome."
-  [content !state !save-status title-ctrl tags-ctrl !id type* question-id !status]
+  [content !state !save-status title-ctrl !id !status save!]
   (f/widget
    :context ctx
    :get [m/Navigator]
@@ -193,14 +205,15 @@
        .children
        [(ui/icon-button
          {:icon m.Icons/arrow_back_rounded
+          ;; Leaving on a failed save would drop the edits, so the page stays
+          ;; put and the reader can retry.
           :on-tap (fn []
-                    (-> (persist! !id type* question-id title-ctrl tags-ctrl
-                                  !state !save-status)
+                    (-> (save!)
                         (.then (fn [saved?]
                                  (when (.-mounted ^m/BuildContext ctx)
-                                   (when-not saved?
-                                     (toast/error! ctx "save failed"))
-                                   (.pop navigator))
+                                   (if saved?
+                                     (.pop navigator)
+                                     (toast/error! ctx "Save failed, still here")))
                                  nil)))
                     nil)})
         (ui/gap-v 18)
@@ -230,9 +243,7 @@
               (revs/open! ctx {:content-id id
                                :published-id (:published-revision-id content)
                                :current-id (:current-revision-id content)
-                               :before-snapshot
-                               #(persist! !id type* question-id title-ctrl
-                                          tags-ctrl !state !save-status)
+                               :before-snapshot save!
                                :on-restore
                                (fn [doc]
                                  (when doc
@@ -240,8 +251,7 @@
                                           (fn [st]
                                             (merge doc (select-keys st [:editor-config
                                                                         :external-keyboard-delegate]))))
-                                   (persist! !id type* question-id title-ctrl
-                                             tags-ctrl !state !save-status)
+                                   (save!)
                                    (toast/success! ctx "Restored"))
                                  nil)})
               nil)})
@@ -249,8 +259,7 @@
         (ui/gap-v 10)
         (ui/action {:label "Publish"
                     :icon m.Icons/publish_rounded
-                    :on-tap #(publish-flow! ctx navigator !id type* question-id
-                                            title-ctrl tags-ctrl !state !save-status)})
+                    :on-tap #(publish-flow! ctx navigator !id save!)})
         (if (and id published?) (ui/gap-v 10) ui/nothing)
         (if (and id published?)
           (ui/ghost-action {:label "Unpublish"
@@ -274,6 +283,7 @@
    :let [!state (atom (or (:document content) (doc/empty-document)))
          !save-status (atom :idle)
          !save-timer (atom nil)
+         !saving (atom nil)
          !id (atom (:id content))
          !status (atom (or (:status content) :draft))
          type* (:type content)
@@ -296,7 +306,7 @@
                      (when-let [t @!save-timer] (.cancel ^async/Timer t))
                      (reset! !save-timer
                              (async/Timer. (dart:core/Duration. .seconds 2)
-                                           #(persist! !id type* question-id
+                                           #(persist! !saving !id type* question-id
                                                       title-ctrl tags-ctrl
                                                       !state !save-status)))
                      nil)]
@@ -311,6 +321,9 @@
                 :tags-ctrl tags-ctrl
                 :on-meta schedule!})
              :dispose dispose-autosave!]
+   ;; Every manual save goes through the same serialised path as autosave.
+   :let [save! (fn [] (persist! !saving !id type* question-id title-ctrl
+                                tags-ctrl !state !save-status))]
    (m/Scaffold
     .backgroundColor theme/bg
     .resizeToAvoidBottomInset false
@@ -322,8 +335,8 @@
        (m/Row
         .crossAxisAlignment m.CrossAxisAlignment/stretch
         .children
-        (cond-> [(editor-chrome content !state !save-status title-ctrl tags-ctrl
-                                !id type* question-id !status)]
+        (cond-> [(editor-chrome content !state !save-status title-ctrl
+                                !id !status save!)]
           (not answer?)
           (conj (meta-field title-ctrl title-focus "Title" m.Icons/title theme/ink))
 

@@ -1,7 +1,9 @@
 (ns nomio.main
   (:require ["package:flutter/material.dart" :as m]
+            ["package:flutter/foundation.dart" :as foundation :refer [kIsWeb]]
             ["package:flutter_styled_toast/flutter_styled_toast.dart" :as st]
             [cljd.flutter :as f]
+            [ime-core.remote-api :as remote]
             [nomio.platform :as platform]
             [nomio.bootstrap.desktop :as desktop-boot]
             [nomio.bootstrap.mobile :as mobile-boot]
@@ -13,6 +15,11 @@
 
 (defn main []
   (m/WidgetsFlutterBinding.ensureInitialized)
+
+  (when kIsWeb 
+    (remote/set-config! {:base-url "localhost:3003"
+                       :candidate-api-path "/api/next_word/candidates"
+                       :next-word-api-path "/api/next_word/list"}))
 
   (try
     (if (platform/desktop?)
